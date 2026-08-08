@@ -66,6 +66,12 @@ void app_main(void)
     bsp_led_set_rgb(BSP_LED_STATUS, 0, 60, 0);
     ESP_LOGI(TAG, "ready: touch the screen to play");
 
+#ifdef CONFIG_THEREMIN_BOOT_SCREENSHOT
+    /* One-shot remote screenshot ~8 s after boot (for docs). */
+    vTaskDelay(pdMS_TO_TICKS(8000));
+    ui_screenshot_dump();
+#endif
+
     while (true) {
         vTaskDelay(pdMS_TO_TICKS(15000));
         ESP_LOGI(TAG, "heartbeat: free heap %u KiB, free PSRAM %u KiB",

@@ -4,6 +4,10 @@
 
 TherminEsp is the fully-embedded successor to [Wavr](https://github.com/MarioCruz/Wavr), my browser-based visual theremin (MediaPipe + Web Audio on a Raspberry Pi 5). Everything Wavr did across a Pi, Chromium, and a webcam now happens inside a single microcontroller.
 
+![TherminEsp UI on the 800×480 touchscreen](docs/screenshot-ui.png)
+
+*The instrument's screen, captured remotely from the running board — the firmware reads the RGB panel's framebuffer and streams it over serial (`CONFIG_THEREMIN_BOOT_SCREENSHOT`).*
+
 | | Wavr (Pi 5) | TherminEsp (ESP32-S31) |
 |---|---|---|
 | Hand tracking | MediaPipe Hands, in-browser JS | **espdet-pico neural net, on-chip** (~95 ms/frame) |
@@ -118,6 +122,7 @@ Things this board taught me the hard way — each one cost a debug cycle:
 6. **Wi-Fi doesn't fit** in internal RAM alongside camera + LVGL on this chip today (same wall the previous firmware on this board hit) — hence the LCD-native UI instead of a web dashboard.
 7. **IDF's C++ flags (`gnu++26 -Werror`)** reject partially-designated initializers on driver config structs — `= {}` then assign fields.
 8. **Embed a known-good test input for any on-device ML.** The boot self-test (2 hands @ 0.92 on the reference photo) turns "why doesn't it detect?" from a mystery into a one-line answer: it's your camera image, not the model.
+9. **Remote screenshots without a debugger:** `lv_snapshot_take()` deadlocks against the esp_lvgl_adapter's render task — read the RGB panel's framebuffers directly instead (`esp_lcd_rgb_panel_get_frame_buffer`). With triple buffering, dump all three and keep the complete one; base64 over the console UART is slow (~90 s/frame at 115200) but needs zero extra hardware. Enable with `CONFIG_THEREMIN_BOOT_SCREENSHOT` in menuconfig.
 
 ## Status
 

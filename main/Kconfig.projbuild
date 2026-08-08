@@ -1,0 +1,11 @@
+menu "TherminEsp"
+
+    config THEREMIN_BOOT_SCREENSHOT
+        bool "Dump a screenshot over serial ~8 s after boot"
+        default n
+        help
+            One-shot remote screenshot for documentation: renders the LVGL
+            screen and prints it as base64 RGB565 between SCREENSHOT
+            BEGIN/END markers (~90 s at 115200 baud).
+
+endmenu

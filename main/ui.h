@@ -23,6 +23,10 @@ void ui_hand_update(bool present, float x_norm, float y_norm, float freq, float 
 /* Live view of the detector input (RGB888, w*h). Safe from any task. */
 void ui_preview_update(const uint8_t *rgb888, int w, int h);
 
+/* Render the current screen and dump it over serial as base64 RGB565
+ * (SCREENSHOT BEGIN/END markers). Blocks the caller for ~90 s at 115200. */
+void ui_screenshot_dump(void);
+
 #ifdef __cplusplus
 }
 #endif

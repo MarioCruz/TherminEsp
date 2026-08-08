@@ -2,8 +2,12 @@
 
 #include <stdio.h>
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_lcd_panel_rgb.h"
 #include "esp_log.h"
 #include "lvgl.h"
+#include "mbedtls/base64.h"
 
 #include "bsp/display.h"
 #include "bsp/led.h"
@@ -134,6 +138,40 @@ static lv_obj_t *make_button(lv_obj_t *parent, const char *text, uint32_t color,
     lv_obj_center(label);
     *out_label = label;
     return btn;
+}
+
+void ui_screenshot_dump(void)
+{
+    /* Read the RGB panel's framebuffer directly — the screen is static
+     * between UI events, so no lock is needed and LVGL is never involved. */
+    esp_lcd_panel_handle_t panel = bsp_display_get_panel();
+    void *fbs[3] = {};
+    if (!panel ||
+        esp_lcd_rgb_panel_get_frame_buffer(panel, 3, &fbs[0], &fbs[1], &fbs[2]) != ESP_OK) {
+        printf("SCREENSHOT FAIL\n");
+        return;
+    }
+    /* triple buffering: dump every buffer — pick the complete one offline */
+    const uint32_t w = BSP_LCD_H_RES;
+    const uint32_t h = BSP_LCD_V_RES;
+    static unsigned char b64[2400];
+    for (int i = 0; i < 3; i++) {
+        if (!fbs[i]) {
+            continue;
+        }
+        printf("\nSCREENSHOT BEGIN %u %u %d\n", (unsigned)w, (unsigned)h, i);
+        for (uint32_t y = 0; y < h; y++) {
+            const uint8_t *row = (const uint8_t *)fbs[i] + y * w * 2;
+            size_t olen = 0;
+            if (mbedtls_base64_encode(b64, sizeof(b64) - 1, &olen, row, w * 2) == 0) {
+                b64[olen] = '\0';
+                printf("%s\n", b64);
+            }
+            vTaskDelay(pdMS_TO_TICKS(1));   /* let the UART drain */
+        }
+        printf("SCREENSHOT END\n");
+    }
+    printf("SCREENSHOT ALL DONE\n");
 }
 
 void ui_preview_update(const uint8_t *rgb888, int w, int h)
