@@ -132,4 +132,4 @@ Things this board taught me the hard way — each one cost a debug cycle:
 - [Wavr](https://github.com/MarioCruz/Wavr) — the original browser theremin this ports
 - Espressif's [ESP-DL](https://github.com/espressif/esp-dl), [hand_detect](https://components.espressif.com/components/espressif/hand_detect), [esp-video](https://components.espressif.com/components/espressif/esp_video), and the ESP32-S31-Korvo BSP from [esp-dev-kits](https://github.com/espressif/esp-dev-kits)
 - Test image: ["Human-Hands-Front-Back.jpg"](https://commons.wikimedia.org/wiki/File:Human-Hands-Front-Back.jpg) via Wikimedia Commons (public domain, by Evan-Amos)
-- Built with [Claude Code](https://claude.com/claude-code)
+- Built with [Claude Code](https://claude.com/claude-code) — Claude helped integrate Espressif's [hand_detect](https://components.espressif.com/components/espressif/hand_detect) component: confirming ESP32-S31 support (the component's CMake maps the S31 to its RISC-V/P4 model even though the docs don't list it), wiring the espdet-pico detector into the camera pipeline, and adding the embedded-image model self-test that proved the neural net runs correctly on this chip
