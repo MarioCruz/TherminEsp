@@ -26,7 +26,8 @@ static const char *TAG = "tracker";
 #define DET_W        224
 #define DET_H        224
 #define JPEG_IN_MAX  (512 * 1024)
-#define MISS_LIMIT   4              /* consecutive empty frames -> hand gone */
+#define MISS_LIMIT   10             /* ~1.2 s of grace before the note drops */
+#define SCORE_THR    0.15f          /* espdet-pico confidence floor */
 #define EMA_ALPHA    0.5f
 /* box area fraction of frame -> openness (fist small, open hand big) */
 #define AREA_CLOSED  0.03f
@@ -102,7 +103,7 @@ static void __attribute__((unused)) dump_det_frame(void)
 static void tracker_task(void *arg)
 {
     HandDetect detector;
-    detector.set_score_thr(0.2f);
+    detector.set_score_thr(SCORE_THR);
     float ema_x = 0.5f, ema_y = 0.5f, ema_open = 1.0f;
     bool hand_present = false;
     int misses = 0;
