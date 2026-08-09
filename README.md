@@ -23,8 +23,58 @@ Runs on the **ESP32-S31-Korvo-1** dev board — everything needed is on it:
 - 16 MB flash + 16 MB octal PSRAM @ 250 MHz
 - **OV3660 camera** on the DVP interface (720p JPEG @ 17 fps)
 - **800×480 RGB LCD** with GT1151 capacitive touch
-- **ES8389 audio codec** — 48 kHz 16-bit stereo I2S, speakers + mics
+- **ES8389 audio codec** + NS4150B Class-D amp, 48 kHz 16-bit stereo I2S, stereo speakers + dual mics
 - WS2812 status LED, 4 ADC buttons, SD slot
+
+<details>
+<summary><strong>Full hardware breakdown</strong> (part numbers + pin map, verified against the board's boot log and BSP)</summary>
+
+### SoC — ESP32-S31
+- Dual-core 32-bit **RISC-V** + separate **LP (low-power) core**, **320 MHz** (300 MHz rated)
+- Silicon **revision v0.0** (early production stepping)
+- Radios: **Wi-Fi 6** (2.4 GHz), **Bluetooth 5.4 LE**, **802.15.4** (Thread/Zigbee)
+- On-die accelerators: hardware **JPEG codec** (used for the camera decode), **PPA** (pixel-processing accelerator), **2D-DMA**
+
+### Memory & USB
+- **16 MB** SPI flash (QIO @ 80 MHz)
+- **16 MB** octal PSRAM @ **250 MHz** (128-Mbit octal-DDR die) — holds camera buffers + the neural-net model
+- **512 KB** internal SRAM + 31 KB RTC RAM
+- **Silicon Labs CP2102N** USB-to-UART bridge (the serial/flash port)
+
+### Audio
+- **Codec: ES8389** — stereo codec doing both DAC (speakers) and ADC (mics); on I²C `I2C_NUM_0` (SDA=GPIO0, SCL=GPIO1)
+- **Amplifier: NS4150B** Class-D, enabled via **GPIO7** (5.0 V rail, DAC ref 3.3 V) *(part per Espressif Korvo-1 docs — enable-only, not software-readable)*
+- **Speakers:** stereo, **4 Ω / 3 W** each *(product spec)*
+- **Microphones:** dual analog, through the ES8389 ADC
+- **I²S** (`I2S_NUM_0`, ESP is master), default **48 kHz / 16-bit / stereo**:
+
+  | Signal | GPIO | | Signal | GPIO |
+  |---|---|---|---|---|
+  | MCLK | 2 | | Speaker out (SDOUT) | 5 |
+  | BCLK (SCLK) | 3 | | Mic in (DSIN) | 6 |
+  | LRCLK (WS) | 4 | | PA enable | 7 |
+
+### Display & touch
+- **Panel:** 800×480 **RGB LCD**, RGB565, 16-bit parallel RGB, pixel clock **26 MHz**, 3 framebuffers + tear-avoidance
+- **Data lines:** GPIO8–19 + GPIO33–36 (R/G/B lanes); **PCLK=40, DE=43, HSYNC=44, VSYNC=45**; panel-init SPI CS=38, MOSI=60, SCK=61
+- Backlight & display-enable are hardwired on (no GPIO)
+- **Touch: GT1151** capacitive controller (reports as GT1158), shares the I²C bus (0/1)
+
+### Camera
+- **OmniVision OV3660** (3 MP, PID `0x3660`), **DVP parallel** interface
+- **D0–D7 = GPIO46–53**, PCLK=54, **XCLK=55 @ 20 MHz**, VSYNC=56, HSYNC=57; SCCB config over the shared I²C (0/1)
+- Modes: 1280×720 JPEG @12fps (used), 640×480 YUV @10fps, 240×240 RGB565 @24fps (rejected by the driver — see Lessons)
+
+### Storage
+- **microSD**, 4-bit SDMMC: D0–D3=GPIO20–23, CLK=24, CMD=25; active-low power/switch on **GPIO39**
+- GPIO20–25 are shared with an SPI-NAND flash footprint (only one populated — this board wires the SD path)
+
+### Misc
+- **WS2812** single addressable RGB LED on **GPIO37** (GRB, RMT-driven) — the pitch-color indicator
+- **4 buttons** on a resistor ladder read as one ADC input: **ADC1 CH0 = GPIO42** (thresholds ≈ 380 / 820 / 1340 / 1870 mV, S31 software ADC calibration)
+- Also on the SoC but unused here: temperature sensor, v3 capacitive touch peripheral, the LP core
+
+</details>
 
 ## How you play
 
