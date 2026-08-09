@@ -120,6 +120,8 @@ A sample-accurate C port of Wavr's Web Audio graph. Phase-accumulator oscillator
 
 All modes share an RBJ lowpass biquad (Q=2) for the fist/open filter, linear parameter ramps to prevent clicks, scale quantization across 3 octaves, and glide (portamento). A boot self-test sweeps every mode C2→C6 through the codec — if you have speakers connected you get a little demo at every power-on.
 
+> 📖 **[Full synth engine deep-dive →](docs/synth-engine.md)** — the render task, DDS oscillators, the biquad, the pitch/scale pipeline, parameter smoothing, polyphony, the concurrency model, and the latency budget, with the math for every mode.
+
 ### The hand tracker (`main/tracker.cpp`)
 
 - Espressif's **[hand_detect](https://components.espressif.com/components/espressif/hand_detect)** component (espdet-pico, 224×224 input) via **ESP-DL** — the S31 runs the RISC-V (P4) model at ~95 ms/inference, 7–8 fps
