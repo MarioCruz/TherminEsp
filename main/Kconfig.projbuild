@@ -1,5 +1,12 @@
 menu "TherminEsp"
 
+    config THEREMIN_TRACE_FRAMES
+        bool "Log per-frame detection trace (score, latency, position)"
+        default n
+        help
+            Prints a throttled per-frame line from the hand tracker for
+            diagnosing detection dropouts and latency.
+
     config THEREMIN_BOOT_SCREENSHOT
         bool "Dump a screenshot over serial ~8 s after boot"
         default n

@@ -28,6 +28,11 @@ static const char *TAG = "tracker";
 #define JPEG_IN_MAX  (512 * 1024)
 #define MISS_LIMIT   10             /* ~1.2 s of grace before the note drops */
 #define SCORE_THR    0.15f          /* espdet-pico confidence floor */
+/* The detector is reliable only in the center of the narrow FOV — hands near
+ * the edges (especially the top, reached when raising for volume) drop out.
+ * Map this center band to the full [0,1] control range so small, centered
+ * movements span the whole instrument and the hand stays where it's seen. */
+#define ACTIVE_MARGIN 0.22f
 #define EMA_ALPHA    0.5f
 /* box area fraction of frame -> openness (fist small, open hand big) */
 #define AREA_CLOSED  0.03f
@@ -98,6 +103,13 @@ static void __attribute__((unused)) dump_det_frame(void)
         vTaskDelay(pdMS_TO_TICKS(2));   /* let the UART drain */
     }
     printf("FRAMEDUMP END\n");
+}
+
+/* expand the reliable center band [MARGIN, 1-MARGIN] to full [0,1] */
+static inline float remap_active(float v)
+{
+    float out = (v - ACTIVE_MARGIN) / (1.0f - 2.0f * ACTIVE_MARGIN);
+    return out < 0 ? 0 : (out > 1 ? 1 : out);
 }
 
 static void tracker_task(void *arg)
@@ -182,6 +194,18 @@ static void tracker_task(void *arg)
             best_seen = best->score;
         }
 
+#ifdef CONFIG_THEREMIN_TRACE_FRAMES
+        /* per-frame trace: how many camera frames waited (queue depth proxy),
+         * inference ms, detection count + best score, hand center */
+        if ((frame_n % 3) == 0) {
+            ESP_LOGI(TAG, "f#%d dec+infer=%lldms dets=%d score=%.2f pos=(%.2f,%.2f)",
+                     frame_n, (t1 - t0) / 1000, (int)results.size(),
+                     best ? best->score : 0.0f,
+                     best ? (best->box[0] + best->box[2]) * 0.5f / DET_W : 0.0f,
+                     best ? (best->box[1] + best->box[3]) * 0.5f / DET_H : 0.0f);
+        }
+#endif
+
         if (best) {
             misses = 0;
             float cx = (best->box[0] + best->box[2]) * 0.5f / DET_W;
@@ -199,9 +223,10 @@ static void tracker_task(void *arg)
                 ema_open += EMA_ALPHA * (open - ema_open);
             }
 
-            /* mirror X so moving your hand right raises pitch on screen */
-            float freq_norm = 1.0f - ema_x;
-            float vol = 1.0f - ema_y;
+            /* mirror X so moving your hand right raises pitch on screen;
+             * remap the reliable center band to the full control range */
+            float freq_norm = remap_active(1.0f - ema_x);
+            float vol = remap_active(1.0f - ema_y);
             float freq = synth_update_voice(0, freq_norm, vol, ema_open);
             ui_hand_update(true, freq_norm, ema_y, freq, vol);
             bsp_led_set_rgb(BSP_LED_STATUS,
