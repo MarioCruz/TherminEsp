@@ -12,7 +12,10 @@
 extern "C" {
 #endif
 
-#define SYNTH_NUM_VOICES 2
+/* 0,1 = up to two camera-tracked hands (duet); 2 = touchscreen, kept
+ * separate so touch and a tracked hand can sound together. */
+#define SYNTH_NUM_VOICES 3
+#define SYNTH_VOICE_TOUCH (SYNTH_NUM_VOICES - 1)
 
 typedef enum {
     SYNTH_MODE_FM = 0,
@@ -53,14 +56,21 @@ void synth_set_mode(synth_mode_t mode);
 void synth_set_scale(synth_scale_t scale);
 void synth_set_root(int midi_note);       /* default 48 = C3 */
 void synth_set_glide(float seconds);      /* default 0.08 */
+void synth_set_clean_wave(bool saw);      /* false = sine (default), true = sawtooth */
 
 synth_mode_t synth_get_mode(void);
 synth_scale_t synth_get_scale(void);
+int synth_get_root(void);
+float synth_get_glide(void);
+bool synth_get_clean_wave(void);
 const char *synth_mode_name(synth_mode_t mode);
 const char *synth_scale_name(synth_scale_t scale);
 
 /* Note name ("A4") for a frequency. buf must hold >= 8 bytes. */
 void synth_note_name(float freq, char *buf);
+
+/* Pitch class name ("C", "C#", ...) for any MIDI note, octave ignored. */
+const char *synth_pitch_class_name(int midi_note);
 
 #ifdef __cplusplus
 }

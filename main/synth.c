@@ -47,6 +47,11 @@ typedef struct {
     /* warm-mode delay line (mono, allocated on first use) */
     float *delay;
     int delay_pos;
+    bool delay_reset_pending;          /* consumed by the render task itself
+                                         * (see synth_set_mode) so a mode
+                                         * re-entry never memsets a buffer
+                                         * the render task is concurrently
+                                         * reading/writing from another core */
     bool active;
     bool releasing;                    /* fading to silence, free when done */
 } voice_t;
@@ -78,7 +83,10 @@ static synth_mode_t s_mode = SYNTH_MODE_FM;
 static synth_scale_t s_scale = SYNTH_SCALE_CHROMATIC;
 static int s_root = 48;                /* C3 */
 static float s_glide = 0.08f;
+static bool s_clean_saw = false;       /* CLEAN mode: false = sine, true = sawtooth */
 static esp_codec_dev_handle_t s_speaker;
+
+static const char *NOTE_NAMES[12] = { "C","C#","D","D#","E","F","F#","G","G#","A","A#","B" };
 
 /* ---- pitch helpers (straight ports) ---- */
 
@@ -188,7 +196,7 @@ static float voice_sample(voice_t *v, synth_mode_t mode)
         break;
     }
     case SYNTH_MODE_CLEAN:
-        out = sinf(v->ph1);
+        out = s_clean_saw ? saw(v->ph1) : sinf(v->ph1);
         v->ph1 += phase_step(f);
         break;
     case SYNTH_MODE_WARM: {
@@ -286,6 +294,16 @@ static void synth_task(void *arg)
                 v->active = false;
                 v->releasing = false;
                 continue;
+            }
+
+            /* Consume a pending Warm-mode buffer reset here, on the render
+             * task's own thread, right before this voice's WARM samples are
+             * rendered — see the comment in synth_set_mode() for why the
+             * caller thread never touches the buffer content directly. */
+            if (mode == SYNTH_MODE_WARM && v->delay && v->delay_reset_pending) {
+                memset(v->delay, 0, DELAY_FRAMES * sizeof(float));
+                v->delay_pos = 0;
+                v->delay_reset_pending = false;
             }
 
             for (int i = 0; i < BLOCK_FRAMES; i++) {
@@ -393,8 +411,41 @@ void synth_stop_voice(int id)
 
 void synth_set_mode(synth_mode_t mode)
 {
+    mode = mode % SYNTH_MODE_COUNT;
+
+    /* Warm mode needs a per-voice delay line. Ensure it exists (and starts
+     * silent) right when we enter Warm, not just lazily on the next
+     * synth_update_voice() call — otherwise switching to Warm mid-note with
+     * no immediate parameter update plays dry, and re-entering Warm without
+     * this replays a stale ~150 ms tail from whatever was last recirculating
+     * in the buffer. heap_caps_calloc never runs under the spinlock.
+     *
+     * A buffer that already exists is NOT memset from here: the render task
+     * reads/writes it every sample, lock-free, from another core, so a
+     * caller-thread memset would race it (a mode-switch landing mid-block
+     * could tear delay_pos or the buffer contents between the two writers).
+     * Instead this only sets a flag; the render task clears the buffer
+     * itself, on its own thread, at the top of the block where it starts
+     * actually using WARM mode — see synth_task(). */
+    if (mode == SYNTH_MODE_WARM && s_mode != SYNTH_MODE_WARM) {
+        for (int i = 0; i < SYNTH_NUM_VOICES; i++) {
+            voice_t *v = &s_voices[i];
+            if (!v->delay) {
+                float *d = heap_caps_calloc(DELAY_FRAMES, sizeof(float), MALLOC_CAP_SPIRAM);
+                taskENTER_CRITICAL(&s_lock);
+                v->delay = d;
+                v->delay_pos = 0;
+                taskEXIT_CRITICAL(&s_lock);
+            } else {
+                taskENTER_CRITICAL(&s_lock);
+                v->delay_reset_pending = true;
+                taskEXIT_CRITICAL(&s_lock);
+            }
+        }
+    }
+
     taskENTER_CRITICAL(&s_lock);
-    s_mode = mode % SYNTH_MODE_COUNT;
+    s_mode = mode;
     /* reset phases so mode switches don't glitch */
     for (int i = 0; i < SYNTH_NUM_VOICES; i++) {
         s_voices[i].ph1 = s_voices[i].ph2 = s_voices[i].ph3 = 0.0f;
@@ -405,17 +456,25 @@ void synth_set_mode(synth_mode_t mode)
 void synth_set_scale(synth_scale_t scale)  { s_scale = scale % SYNTH_SCALE_COUNT; }
 void synth_set_root(int midi_note)         { s_root = midi_note; }
 void synth_set_glide(float seconds)        { s_glide = seconds; }
+void synth_set_clean_wave(bool saw_wave)   { s_clean_saw = saw_wave; }
 synth_mode_t synth_get_mode(void)          { return s_mode; }
 synth_scale_t synth_get_scale(void)        { return s_scale; }
+int synth_get_root(void)                   { return s_root; }
+float synth_get_glide(void)                { return s_glide; }
+bool synth_get_clean_wave(void)            { return s_clean_saw; }
 const char *synth_mode_name(synth_mode_t m)  { return MODE_NAMES[m % SYNTH_MODE_COUNT]; }
 const char *synth_scale_name(synth_scale_t s) { return SCALES[s % SYNTH_SCALE_COUNT].name; }
 
 void synth_note_name(float freq, char *buf)
 {
-    static const char *NAMES[12] = { "C","C#","D","D#","E","F","F#","G","G#","A","A#","B" };
     int midi = (int)roundf(freq_to_midi(freq));
     midi = midi < 0 ? 0 : (midi > 127 ? 127 : midi);
     int pc = midi % 12;
     int octave = midi / 12 - 1;
-    snprintf(buf, 8, "%s%d", NAMES[pc], octave);
+    snprintf(buf, 8, "%s%d", NOTE_NAMES[pc], octave);
+}
+
+const char *synth_pitch_class_name(int midi_note)
+{
+    return NOTE_NAMES[((midi_note % 12) + 12) % 12];
 }

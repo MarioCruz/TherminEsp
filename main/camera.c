@@ -80,26 +80,22 @@ esp_err_t camera_start(camera_frame_cb_t cb, void *ctx)
     s_cb = cb;
     s_cb_ctx = ctx;
 
-    /* Preferred: small RGB565 frames the detector can eat directly. */
-    esp_err_t e = try_open(240, 240, BSP_CAMERA_PIXEL_FORMAT_RGB565_BE);
-    if (e == ESP_OK) {
-        s_is_jpeg = false;
-        ESP_LOGI(TAG, "opened 240x240 RGB565 (negotiated %ux%u, %u bytes/frame)",
-                 (unsigned)s_fmt.width, (unsigned)s_fmt.height,
-                 (unsigned)s_fmt.sizeimage);
-    } else {
-        /* Fallback proven by the wedding recorder: 720p JPEG. */
-        ESP_LOGW(TAG, "RGB565 240x240 open failed (%s), falling back to 720p JPEG",
-                 esp_err_to_name(e));
-        e = try_open(1280, 720, BSP_CAMERA_PIXEL_FORMAT_JPEG);
-        if (e != ESP_OK) {
-            ESP_LOGE(TAG, "camera open failed entirely: %s", esp_err_to_name(e));
-            return e;
-        }
-        s_is_jpeg = true;
-        ESP_LOGI(TAG, "opened 1280x720 JPEG (negotiated %ux%u)",
-                 (unsigned)s_fmt.width, (unsigned)s_fmt.height);
+    /* 240x240 RGB565 would be the ideal detector input (no JPEG decode
+     * needed), but this DVP driver rejects it outright:
+     *   E dvp_video: input width=240, height=240 is not supported
+     * Confirmed on this board's esp-video/OV3660 stack — verified, not a
+     * one-off. Go straight to 720p JPEG (the mode the wedding recorder
+     * proved works) instead of paying for a doomed open + 5 error lines on
+     * every boot. Re-probe 240x240 here if a future esp-video release adds
+     * small DVP modes. */
+    esp_err_t e = try_open(1280, 720, BSP_CAMERA_PIXEL_FORMAT_JPEG);
+    if (e != ESP_OK) {
+        ESP_LOGE(TAG, "camera open failed: %s", esp_err_to_name(e));
+        return e;
     }
+    s_is_jpeg = true;
+    ESP_LOGI(TAG, "opened 1280x720 JPEG (negotiated %ux%u)",
+             (unsigned)s_fmt.width, (unsigned)s_fmt.height);
 
     BaseType_t ok = xTaskCreatePinnedToCore(camera_task, "camera", 4096, NULL, 5, NULL, 0);
     return ok == pdPASS ? ESP_OK : ESP_FAIL;

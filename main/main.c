@@ -11,7 +11,9 @@
 
 #include "bsp/display.h"
 #include "bsp/led.h"
+#include "buttons.h"
 #include "camera.h"
+#include "settings.h"
 #include "synth.h"
 #include "tracker.h"
 #include "ui.h"
@@ -54,13 +56,23 @@ void app_main(void)
     bsp_display_backlight_on();
 
     ESP_ERROR_CHECK(synth_init());
-    ESP_ERROR_CHECK(ui_init());
+    if (settings_init() != ESP_OK) {
+        ESP_LOGW(TAG, "settings persistence unavailable — defaults only, nothing will stick across reboots");
+    }
     synth_selftest();
+    /* Restore saved mode/scale/root/glide AFTER the self-test, which always
+     * ends by resetting to FM — otherwise a persisted non-FM mode would be
+     * clobbered right after boot. ui_init() runs after this so its button
+     * labels reflect the restored state, not the self-test's FM reset. */
+    settings_load();
+    ESP_ERROR_CHECK(ui_init());
+    buttons_init();     /* non-fatal if unavailable — logs its own warning */
 
     /* Hand tracking: camera frames -> JPEG decode -> espdet-pico -> voice 0.
      * If either fails, the touchscreen still plays. */
     if (tracker_init() != ESP_OK || camera_start(tracker_on_frame, NULL) != ESP_OK) {
         ESP_LOGW(TAG, "camera/tracker unavailable — touch play still works");
+        ui_set_camera_state(false);
     }
 
     bsp_led_set_rgb(BSP_LED_STATUS, 0, 60, 0);

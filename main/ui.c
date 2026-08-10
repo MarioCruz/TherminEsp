@@ -1,5 +1,6 @@
 #include "ui.h"
 
+#include <math.h>
 #include <stdio.h>
 
 #include "freertos/FreeRTOS.h"
@@ -11,6 +12,7 @@
 
 #include "bsp/display.h"
 #include "bsp/led.h"
+#include "settings.h"
 #include "synth.h"
 
 static const char *TAG = "ui";
@@ -34,6 +36,17 @@ static lv_obj_t *s_vol_label;
 static lv_obj_t *s_hint_label;
 static lv_obj_t *s_mode_btn_label;
 static lv_obj_t *s_scale_btn_label;
+static lv_obj_t *s_root_btn_label;
+static lv_obj_t *s_glide_btn_label;
+
+static const struct { const char *label; float seconds; } GLIDE_PRESETS[] = {
+    { "Glide: Snap",  0.0f },
+    { "Glide: Fast",  0.08f },
+    { "Glide: Slow",  0.3f },
+    { "Glide: Drift", 0.8f },
+};
+#define GLIDE_PRESET_COUNT (sizeof(GLIDE_PRESETS) / sizeof(GLIDE_PRESETS[0]))
+static int s_glide_idx = 1;
 
 /* pitch position -> LED hue sweep (coral red at low, sky blue at high) */
 static void led_from_pitch(float x_norm)
@@ -48,7 +61,7 @@ static void surface_event_cb(lv_event_t *e)
     lv_event_code_t code = lv_event_get_code(e);
 
     if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
-        synth_stop_voice(0);
+        synth_stop_voice(SYNTH_VOICE_TOUCH);
         lv_obj_add_flag(s_marker, LV_OBJ_FLAG_HIDDEN);
         lv_label_set_text(s_note_label, "--");
         lv_label_set_text(s_freq_label, "-- Hz");
@@ -78,8 +91,11 @@ static void surface_event_cb(lv_event_t *e)
     y = y < 0 ? 0 : (y > 1 ? 1 : y);
     float vol = 1.0f - y;
 
-    /* openness fixed fully open until the camera supplies it */
-    float freq = synth_update_voice(0, x, vol, 1.0f);
+    /* dedicated touch voice: camera hand tracking owns voices 0/1 (up to a
+     * two-hand duet), so touch and tracked hands can all sound together
+     * instead of fighting over one voice.
+     * openness fixed fully open since touch has no fist/open gesture. */
+    float freq = synth_update_voice(SYNTH_VOICE_TOUCH, x, vol, 1.0f);
 
     char note[8];
     synth_note_name(freq, note);
@@ -93,13 +109,107 @@ static void surface_event_cb(lv_event_t *e)
     led_from_pitch(x);
 }
 
-static void mode_btn_cb(lv_event_t *e)
+/* "Clean Wave" shows which waveform it's currently playing so the
+ * long-press toggle (below) has somewhere to display its state. Caller
+ * must hold the display lock. */
+static void mode_btn_refresh_label(void)
 {
+    if (synth_get_mode() == SYNTH_MODE_CLEAN) {
+        lv_label_set_text(s_mode_btn_label, synth_get_clean_wave() ? "Clean Saw" : "Clean Sine");
+    } else {
+        lv_label_set_text(s_mode_btn_label, synth_mode_name(synth_get_mode()));
+    }
+}
+
+/* ui_cycle_*()/ui_toggle_clean_wave() are the single source of truth for
+ * "a control changed": they touch the synth, refresh the label, and mark
+ * settings dirty. Both the touchscreen buttons and main/buttons.c (the
+ * physical buttons, running on the iot_button library's own task) call
+ * these directly instead of duplicating the logic — which means each one
+ * can genuinely be entered from two different tasks. The read-modify-write
+ * (read the current value, compute next, write it back) is NOT atomic on
+ * its own, so the whole sequence — including s_glide_idx, a plain int with
+ * no other protection — runs under the display lock, not just the label
+ * update at the end. The lock is recursive, so this is free (just a
+ * refcount bump) when already called from the LVGL task, and genuinely
+ * serializes against the physical-button task the rest of the time. */
+
+void ui_cycle_mode(void)
+{
+    if (!bsp_display_lock(-1)) {
+        return;
+    }
     synth_mode_t next = (synth_get_mode() + 1) % SYNTH_MODE_COUNT;
     synth_set_mode(next);
-    lv_label_set_text(s_mode_btn_label, synth_mode_name(next));
+    mode_btn_refresh_label();
+    bsp_display_unlock();
+    settings_mark_dirty();
     ESP_LOGI(TAG, "mode -> %s", synth_mode_name(next));
 }
+
+/* Toggle sine/sawtooth while on Clean Wave; no-op on any other mode. Wired
+ * to a long-press on the touchscreen mode button so a short tap always
+ * advances mode — there's no dead end where you get stuck on Clean Wave. */
+void ui_toggle_clean_wave(void)
+{
+    if (!bsp_display_lock(-1)) {
+        return;
+    }
+    if (synth_get_mode() != SYNTH_MODE_CLEAN) {
+        bsp_display_unlock();
+        return;
+    }
+    synth_set_clean_wave(!synth_get_clean_wave());
+    mode_btn_refresh_label();
+    bsp_display_unlock();
+    settings_mark_dirty();
+    ESP_LOGI(TAG, "clean waveform -> %s", synth_get_clean_wave() ? "saw" : "sine");
+}
+
+void ui_cycle_scale(void)
+{
+    if (!bsp_display_lock(-1)) {
+        return;
+    }
+    synth_scale_t next = (synth_get_scale() + 1) % SYNTH_SCALE_COUNT;
+    synth_set_scale(next);
+    lv_label_set_text(s_scale_btn_label, synth_scale_name(next));
+    bsp_display_unlock();
+    settings_mark_dirty();
+    ESP_LOGI(TAG, "scale -> %s", synth_scale_name(next));
+}
+
+void ui_cycle_root(void)
+{
+    if (!bsp_display_lock(-1)) {
+        return;
+    }
+    int next_root = 48 + ((synth_get_root() % 12) + 1) % 12;
+    synth_set_root(next_root);
+    lv_label_set_text(s_root_btn_label, synth_pitch_class_name(next_root));
+    bsp_display_unlock();
+    settings_mark_dirty();
+    ESP_LOGI(TAG, "root -> %s", synth_pitch_class_name(next_root));
+}
+
+void ui_cycle_glide(void)
+{
+    if (!bsp_display_lock(-1)) {
+        return;
+    }
+    s_glide_idx = (s_glide_idx + 1) % GLIDE_PRESET_COUNT;
+    synth_set_glide(GLIDE_PRESETS[s_glide_idx].seconds);
+    lv_label_set_text(s_glide_btn_label, GLIDE_PRESETS[s_glide_idx].label);
+    bsp_display_unlock();
+    settings_mark_dirty();
+    ESP_LOGI(TAG, "glide -> %s", GLIDE_PRESETS[s_glide_idx].label);
+}
+
+static void mode_btn_cb(lv_event_t *e)      { ui_cycle_mode(); }
+static void mode_btn_long_cb(lv_event_t *e) { ui_toggle_clean_wave(); }
+static void scale_btn_cb(lv_event_t *e)     { ui_cycle_scale(); }
+static void root_btn_cb(lv_event_t *e)      { ui_cycle_root(); }
+static void glide_btn_cb(lv_event_t *e)     { ui_cycle_glide(); }
 
 /* tap the title to toggle the camera debug view */
 static void title_cb(lv_event_t *e)
@@ -112,14 +222,6 @@ static void title_cb(lv_event_t *e)
             lv_obj_add_flag(s_preview, LV_OBJ_FLAG_HIDDEN);
         }
     }
-}
-
-static void scale_btn_cb(lv_event_t *e)
-{
-    synth_scale_t next = (synth_get_scale() + 1) % SYNTH_SCALE_COUNT;
-    synth_set_scale(next);
-    lv_label_set_text(s_scale_btn_label, synth_scale_name(next));
-    ESP_LOGI(TAG, "scale -> %s", synth_scale_name(next));
 }
 
 static lv_obj_t *make_button(lv_obj_t *parent, const char *text, uint32_t color,
@@ -218,6 +320,15 @@ void ui_hand_update(bool present, float x_norm, float y_norm, float freq, float 
     bsp_display_unlock();
 }
 
+void ui_set_camera_state(bool ok)
+{
+    if (ok || !bsp_display_lock(50)) {
+        return;
+    }
+    lv_label_set_text(s_hint_label, "camera off — touch to play\n\nX = pitch    Y = volume");
+    bsp_display_unlock();
+}
+
 esp_err_t ui_init(void)
 {
     bsp_display_lock(-1);
@@ -284,7 +395,7 @@ esp_err_t ui_init(void)
     lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(panel, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
                           LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(panel, 10, 0);
+    lv_obj_set_style_pad_row(panel, 6, 0);
 
     s_note_label = lv_label_create(panel);
     lv_label_set_text(s_note_label, "--");
@@ -301,10 +412,27 @@ esp_err_t ui_init(void)
     lv_obj_set_style_text_font(s_vol_label, &lv_font_montserrat_24, 0);
     lv_obj_set_style_text_color(s_vol_label, lv_color_hex(COLOR_TEAL), 0);
 
-    make_button(panel, synth_mode_name(synth_get_mode()), COLOR_CORAL,
-                mode_btn_cb, &s_mode_btn_label);
+    const char *mode_label = (synth_get_mode() == SYNTH_MODE_CLEAN)
+        ? (synth_get_clean_wave() ? "Clean Saw" : "Clean Sine")
+        : synth_mode_name(synth_get_mode());
+    lv_obj_t *mode_btn = make_button(panel, mode_label, COLOR_CORAL, mode_btn_cb, &s_mode_btn_label);
+    lv_obj_add_event_cb(mode_btn, mode_btn_long_cb, LV_EVENT_LONG_PRESSED, NULL);
+
     make_button(panel, synth_scale_name(synth_get_scale()), COLOR_SKY,
                 scale_btn_cb, &s_scale_btn_label);
+    make_button(panel, synth_pitch_class_name(synth_get_root()), COLOR_TEAL,
+                root_btn_cb, &s_root_btn_label);
+
+    float cur_glide = synth_get_glide();
+    s_glide_idx = 1;
+    for (int i = 0; i < (int)GLIDE_PRESET_COUNT; i++) {
+        if (fabsf(GLIDE_PRESETS[i].seconds - cur_glide) < 0.001f) {
+            s_glide_idx = i;
+            break;
+        }
+    }
+    make_button(panel, GLIDE_PRESETS[s_glide_idx].label, COLOR_NAVY,
+                glide_btn_cb, &s_glide_btn_label);
 
     bsp_display_unlock();
     ESP_LOGI(TAG, "theremin screen up");
