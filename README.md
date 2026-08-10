@@ -195,7 +195,7 @@ Things this board taught me the hard way — each one cost a debug cycle:
 - ✅ Settings persistence — mode/scale/root/glide/waveform survive a reboot (NVS, debounced writes)
 - ✅ Tracker thresholds are runtime-tunable (`tracker_set_tuning()`) instead of reflash-to-adjust — nothing calls it yet (console commands or a debug screen are the natural next step)
 - ✅ CI — GitHub Actions builds the firmware on every push ([workflow](.github/workflows/build.yml))
-- 🔧 **The 2026-08-10 batch above builds clean but hasn't been flashed to hardware yet** (board was disconnected) — see **[TODO.md](TODO.md)** for the verification checklist and what's still genuinely open (a couple of parking-lot ideas, dual-hand UI, live tuning UI)
+- ✅ The 2026-08-10 batch above is flashed and boot-verified on hardware — clean boot log, self-test + model self-test pass, physical buttons register correctly
 
 ## License
 
