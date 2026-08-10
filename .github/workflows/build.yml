@@ -1,0 +1,160 @@
+name: Build
+
+# Build-only CI: compiles the firmware on every push/PR to main. There is no
+# hardware runner here, so this never flashes or runs anything on a real
+# ESP32-S31 - it only proves `idf.py build` succeeds.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  # ESP-IDF v6.1-beta1 is the earliest IDF release with (preview) ESP32-S31
+  # support - there is no stable IDF release with S31 support as of writing.
+  # Verified this tag is real and checkoutable: `git ls-remote --tags
+  # https://github.com/espressif/esp-idf v6.1-beta1` resolves, and the same
+  # tag exists as a prebuilt image on Docker Hub (espressif/idf:v6.1-beta1).
+  # If a newer stable IDF release ships S31 support later, bump this pin
+  # (and drop --preview below once esp32s31 leaves ESP-IDF's PREVIEW_TARGETS
+  # list - see the comment on the set-target step).
+  IDF_REF: v6.1-beta1
+
+jobs:
+  build:
+    name: Build firmware (esp32s31)
+    runs-on: ubuntu-latest
+    steps:
+      # --- Checkout, laid out as siblings under $GITHUB_WORKSPACE ---------
+      #
+      # main/idf_component.yml resolves the Korvo BSP as a *relative path*
+      # dependency: `../../ESPressif/esp-dev-kits/examples/esp32-s31-korvo/...`
+      # (relative to main/, i.e. two levels up from main/ = the workspace
+      # root, then into ESPressif/esp-dev-kits/...). CMakeLists.txt's
+      # EXTRA_COMPONENT_DIRS uses `../ESPressif/esp-dev-kits/...` (relative
+      # to the repo root itself). Both resolve correctly only if:
+      #
+      #   $GITHUB_WORKSPACE/
+      #   |- TherminEsp/            <- this repo, checked out with path: TherminEsp
+      #   `- ESPressif/
+      #      `- esp-dev-kits/       <- checked out with path: ESPressif/esp-dev-kits
+      #
+      # actions/checkout's `path` input is documented as "relative path
+      # under $GITHUB_WORKSPACE to place the repository", and its own README
+      # shows exactly this sibling-checkout pattern for a second repo. So
+      # the primary checkout must NOT use the default (which would place
+      # TherminEsp's contents directly at $GITHUB_WORKSPACE) - it needs an
+      # explicit `path: TherminEsp` too, so both repos land as siblings one
+      # level down.
+      - name: Checkout TherminEsp
+        uses: actions/checkout@v7
+        with:
+          path: TherminEsp
+
+      # --- esp-dev-kits (Korvo-1 BSP) --------------------------------------
+      #
+      # espressif/esp-dev-kits is Espressif's full dev-kits monorepo (docs,
+      # schematics, factory firmware, and examples for many boards) and it
+      # is large - roughly 800 MB on the wire for a full clone as of this
+      # writing. We only need the examples/esp32-s31-korvo subtree (confirmed
+      # to exist on the `master` default branch and to contain the
+      # examples/common_components/esp32_s31_korvo path that
+      # idf_component.yml/CMakeLists.txt reference). actions/checkout
+      # supports `sparse-checkout` (cone mode, the default) to fetch just
+      # that directory tree, combined with a shallow `fetch-depth: 1` to
+      # skip history - this keeps the second checkout fast instead of
+      # pulling the whole monorepo.
+      #
+      # Tradeoff if this ever breaks (e.g. the BSP moves to a different
+      # example directory upstream): the safe fallback is to delete the
+      # `sparse-checkout:` block below and just do a plain shallow checkout
+      # of the whole repo (`fetch-depth: 1`, no sparse-checkout) - slower
+      # (~800 MB) but not dependent on knowing the exact subtree in advance.
+      - name: Checkout esp-dev-kits (ESP32-S31-Korvo-1 BSP, sparse)
+        uses: actions/checkout@v7
+        with:
+          repository: espressif/esp-dev-kits
+          path: ESPressif/esp-dev-kits
+          ref: master
+          fetch-depth: 1
+          sparse-checkout: |
+            examples/esp32-s31-korvo
+          sparse-checkout-cone-mode: true
+
+      # --- ESP-IDF toolchain ------------------------------------------------
+      #
+      # We install ESP-IDF manually rather than via espressif/esp-idf-ci-action.
+      # What was actually verified before choosing this:
+      #
+      #  - esp-idf-ci-action's `esp_idf_version` input is passed straight
+      #    through as a Docker tag (`espressif/idf:<esp_idf_version>`) - the
+      #    action does not restrict it to stable releases. Docker Hub does
+      #    have a real `espressif/idf:v6.1-beta1` image (confirmed via the
+      #    Docker Hub API - actively pushed/pulled), so the tag itself is
+      #    usable in principle.
+      #  - BUT the action never calls `idf.py set-target`; it sets an
+      #    IDF_TARGET env var and runs `idf.py build` directly inside the
+      #    container. In ESP-IDF v6.1-beta1's source, the `--preview`
+      #    requirement is enforced only inside idf.py's `set-target` (and
+      #    `docs --target`) Python command handlers
+      #    (tools/idf_py_actions/core_ext.py, gated on
+      #    tools/idf_py_actions/constants.py's PREVIEW_TARGETS, which does
+      #    list esp32s31) - the CMake layer that `idf.py build` uses
+      #    (tools/cmake/targets.cmake) has no such gate and just takes
+      #    IDF_TARGET from the environment unconditionally. So the action's
+      #    default flow *might* build esp32s31 fine without ever passing
+      #    --preview anywhere - but that's inferred from reading IDF's
+      #    source, not documented/tested behavior for a preview target, and
+      #    it could not be executed here to confirm (no Docker/hardware in
+      #    this research environment).
+      #
+      # Given that uncertainty, this workflow instead runs the exact
+      # sequence documented in this repo's own README (and confirmed still
+      # correct for v6.1-beta1, see below): install IDF from the v6.1-beta1
+      # git tag, source export.sh, then `idf.py --preview set-target
+      # esp32s31 && idf.py build`. This is slower to set up than the action
+      # (no prebuilt Docker image) but matches documented, verifiable
+      # behavior end to end.
+      - name: Install build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git wget flex bison gperf python3 python3-pip \
+            python3-venv cmake ninja-build ccache libffi-dev libssl-dev \
+            dfu-util libusb-1.0-0
+
+      - name: Clone ESP-IDF (${{ env.IDF_REF }})
+        run: |
+          git clone -b "${IDF_REF}" --depth 1 --recursive --shallow-submodules \
+            https://github.com/espressif/esp-idf.git "${HOME}/esp-idf"
+
+      # Cache the downloaded toolchain (compilers, etc.) under ~/.espressif
+      # (IDF_TOOLS_PATH's default location) so repeat runs against the same
+      # pinned IDF_REF don't re-download it every time. Safe even on a
+      # cache miss - install.sh just downloads fresh.
+      - name: Cache ESP-IDF tools
+        uses: actions/cache@v6
+        with:
+          path: ~/.espressif
+          key: idf-tools-${{ runner.os }}-${{ env.IDF_REF }}-esp32s31
+
+      - name: Install ESP-IDF tools for esp32s31
+        run: |
+          "${HOME}/esp-idf/install.sh" esp32s31
+
+      # --- Configure + build ------------------------------------------------
+      #
+      # Confirmed against ESP-IDF's own source at the v6.1-beta1 tag
+      # (tools/idf_py_actions/constants.py):
+      #   PREVIEW_TARGETS = ['linux', 'esp32h21', 'esp32h4', 'esp32s31']
+      # and core_ext.py's set-target handler raises a FatalError for any
+      # target in that list unless `--preview` is passed - so esp32s31 still
+      # requires `idf.py --preview set-target esp32s31` in v6.1-beta1; the
+      # flag has not been dropped or changed for this target/version. This
+      # matches the ESP32-S31 being brand-new silicon (mass production only
+      # since July 2026) with preview-only IDF support.
+      - name: Build firmware
+        working-directory: TherminEsp
+        run: |
+          . "${HOME}/esp-idf/export.sh"
+          idf.py --preview set-target esp32s31
+          idf.py build
