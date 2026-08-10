@@ -7,15 +7,28 @@ Original punch-list from the 2026-08-10 code review. All 15 scoped items (Tiers 
 ## Pending
 
 ### Hardware verification
-Everything below built clean (`idf.py build`, zero warnings/errors in project code) but has **not yet been flashed and verified on the physical board** — it was disconnected when this batch was implemented. Needs, in order: flash, watch the boot log (self-test sweep, settings restore, button init, camera/tracker init), then hands-on checks:
+Flashed and boot-verified on the physical board on 2026-08-10. Confirmed from the boot log and a short live session:
+- ✅ Clean boot log, no `dvp_video` errors (1.3)
+- ✅ Self-test sweeps all 7 modes and the model self-test (0.92) both still pass
+- ✅ `buttons: 4 physical buttons registered` — the ADC ladder + `iot_button` wiring (3.1) initializes correctly
+- ✅ Mode/scale/root/glide all cycled live (seen in the serial log) — though touch and the physical buttons log identically by design, so this alone doesn't prove which input source was used; add a source tag if that distinction matters later
+
+Still open — needs deliberate hands-on checks, not just a boot log:
 - Marker Y tracks volume (1.1)
 - Touch + a tracked hand sound together, independently (1.2)
-- Clean boot log, no `dvp_video` errors (1.3)
-- Warm Tone has no dry/ghost-audio glitch on mode entry (1.4)
-- Root/glide/clean-wave buttons — touchscreen AND the 4 physical buttons — plus a power-cycle to confirm settings actually persist (2.1, 2.2, 2.3, 3.1, 3.2)
+- Warm Tone has no dry/ghost-audio glitch on mode entry (1.4) — the flag-based fix (see README lesson #10) hasn't been exercised specifically
+- A power-cycle to confirm settings actually persist (3.2)
 - Two hands in frame → two independent voices, no identity-swap glitching when hands cross (2.4)
 - Unplug the camera cable (or cover the lens at init) → the "camera off" hint appears (4.4)
-- First real CI run on GitHub Actions — the workflow author flagged specific lines likely to need a fix-up (see `.github/workflows/build.yml` comments) (4.2)
+- First real CI run on GitHub Actions — blocked on the GitHub token lacking `workflow` scope (see below); the workflow author also flagged specific lines likely to need a fix-up (see `.github/workflows/build.yml` comments) (4.2)
+
+### Push blocked: GitHub token missing `workflow` scope
+`.github/workflows/build.yml` is committed locally (as of `987aa2a`) but held back from `git push` — GitHub rejects OAuth app tokens without the `workflow` scope touching files under `.github/workflows/`. A `gh auth refresh -h github.com -s workflow` device-code flow was started; once authorized, add the file back and push:
+```
+git add .github/workflows/build.yml
+git commit -m "Add CI workflow"
+git push
+```
 
 ### 4.3 nicer version — live tuning without a reflash
 The tunable-threshold struct (`tracker_set_tuning()`) exists but nothing calls it yet. Two ways to actually use it:
