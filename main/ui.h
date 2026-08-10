@@ -1,6 +1,6 @@
 /*
  * TherminEsp LVGL UI — Beach Boys-themed theremin screen with a touch play
- * surface (interim controller until the camera hand tracker lands).
+ * surface that plays alongside the camera hand tracker, not instead of it.
  */
 #pragma once
 

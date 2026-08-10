@@ -15,4 +15,15 @@ menu "TherminEsp"
             screen and prints it as base64 RGB565 between SCREENSHOT
             BEGIN/END markers (~90 s at 115200 baud).
 
+    config THEREMIN_DUMP_FIRST_FRAME
+        bool "Dump the first detector-input frame over serial"
+        default n
+        help
+            One-shot image-quality check: prints the first 224x224 RGB888
+            frame the detector sees as base64 (FRAMEDUMP BEGIN/END markers)
+            so it can be inspected off-board. This is what diagnosed the
+            camera orientation and JPEG byte-order bugs during initial
+            bring-up — enable when detection silently finds nothing and you
+            need to see exactly what the model is looking at.
+
 endmenu

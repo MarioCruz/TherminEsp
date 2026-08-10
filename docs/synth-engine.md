@@ -74,7 +74,7 @@ static void synth_task(void *arg)
 
 ## 4. The voice model
 
-A "voice" is one independent sounding note. There are `SYNTH_NUM_VOICES = 2` — enough for a two-hand duet, one voice per hand.
+A "voice" is one independent sounding note. There are `SYNTH_NUM_VOICES = 3`: voices 0/1 are up to two camera-tracked hands (a real duet — see the tracker's `assign_detections()`), and voice 2 (`SYNTH_VOICE_TOUCH`) is the touchscreen, kept separate so touch and a tracked hand sound together instead of fighting over the same voice.
 
 ```c
 typedef struct {
@@ -308,9 +308,9 @@ block[2*i] = block[2*i+1] = q;    // duplicate mono → L + R
 
 The engine is lock-light by design. A single FreeRTOS spinlock (`portMUX_TYPE s_lock`) guards the short critical sections where a caller thread and the render task could race:
 
-- `synth_update_voice()` writes a voice's `*_tgt` values and (on attack) its phase/state under the lock; the render task snapshots `s_mode`/`s_glide` and reads voice state under the same lock.
+- `synth_update_voice()` writes a voice's `*_tgt` values and (on attack) its phase/state under the lock, and now also scans `active`/`releasing` across all voices under the lock to compute the polyphony gain divisor — that scan used to run unlocked, racing the render task's own writes to those same fields. The render task snapshots `s_mode`/`s_glide` and reads voice state under the same lock.
 - Because callers touch **targets** and the render task walks **current** values, the actual audio math never contends with the control path — the lock is held only for a handful of field writes, never across the DSP loop.
-- The warm-mode delay buffer is lazily allocated by the caller and published under the lock; the render task reads the pointer with a `v->delay ?` guard, and the pointer only ever transitions once (NULL → buffer), so there's no torn-read hazard.
+- The warm-mode delay buffer is lazily allocated by the caller and published under the lock; the render task reads the pointer with a `v->delay ?` guard, and the pointer only ever transitions once (NULL → buffer), so there's no torn-read hazard. **Clearing** an already-allocated buffer (re-entering Warm mode) is a different story: the caller thread never touches the buffer's *content* directly, because the render task reads/writes it every sample from another core. Instead `synth_set_mode()` sets a `delay_reset_pending` flag under the lock, and the render task clears the buffer itself — on its own thread, at the top of the block where it starts using WARM mode — before that voice's first Warm sample renders.
 
 `s_scale` / `s_root` are plain single-word writes read only on the caller's own thread (inside `quantize`, called from `synth_update_voice`), so they need no lock.
 
@@ -333,8 +333,8 @@ The synth is *not* the bottleneck in the instrument — hand-to-sound latency is
 
 - **Naive (aliasing) oscillators** — saw/triangle aren't band-limited; harmless in-range, but a PolyBLEP upgrade would clean the top octave.
 - **Block-rate parameter ramps** — smoothing steps every 5 ms, not per-sample; inaudible in practice but not mathematically click-proof on extreme sweeps.
-- **Two voices** — `SYNTH_NUM_VOICES = 2`. The mixer/limiter would scale to more, but the tracker currently drives voice 0 (camera) and the touch UI drives voice 0 too, so true simultaneous duet needs the tracker's multi-hand path wired up.
 - **Warm-mode delay is per-voice and never freed** until reboot — a deliberate simplification (it's cheap PSRAM), not a leak that grows.
+- **Only hand 0 gets an on-screen marker/note/freq/volume display.** Both tracked hands sound (voices 0/1), but the UI's hint-label/marker state is shared between the camera path and touch, so it reflects whichever last wrote — a deliberate scope cut, not a race (see the tracker's own docs).
 
 ---
 

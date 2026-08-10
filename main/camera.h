@@ -11,8 +11,10 @@
 extern "C" {
 #endif
 
-/* A camera frame delivered to the consumer callback. Data is RGB565 unless
- * is_jpeg is set (fallback mode — decode before use). */
+/* A camera frame delivered to the consumer callback. is_jpeg is always true
+ * today (the only capture mode this DVP driver accepts — see camera.c);
+ * data/width/height still describe whatever was actually negotiated, so
+ * consumers should check them rather than assume a fixed resolution. */
 typedef struct {
     const uint8_t *data;
     uint32_t size;
@@ -23,9 +25,8 @@ typedef struct {
 
 typedef void (*camera_frame_cb_t)(const camera_frame_view_t *frame, void *ctx);
 
-/* Open the camera (240x240 RGB565 preferred, 720p JPEG fallback) and start
- * the capture task. cb runs in the capture task for every frame; keep it
- * quick or copy out. */
+/* Open the camera at 1280x720 JPEG and start the capture task. cb runs in
+ * the capture task for every frame; keep it quick or copy out. */
 esp_err_t camera_start(camera_frame_cb_t cb, void *ctx);
 
 #ifdef __cplusplus

@@ -77,6 +77,20 @@ void tracker_on_frame(const camera_frame_view_t *frame, void *ctx)
     if (!frame->is_jpeg) {
         return;
     }
+    if (frame->width != SRC_W || frame->height != SRC_H) {
+        /* downscale_to_det()'s stride math and the JPEG decode size check
+         * both assume exactly SRC_W x SRC_H — if the sensor ever negotiates
+         * something else (mode table change, BSP update), drop rather than
+         * silently misalign the downscale. */
+        static uint32_t drop_count = 0;
+        if (drop_count % 100 == 0) {
+            ESP_LOGW(TAG, "dropping frame: %ux%u != expected %dx%d (drop #%u)",
+                     (unsigned)frame->width, (unsigned)frame->height, SRC_W, SRC_H,
+                     (unsigned)(drop_count + 1));
+        }
+        drop_count++;
+        return;
+    }
     if (frame->size > s_jpeg_in_cap) {
         static uint32_t drop_count = 0;
         if (drop_count % 100 == 0) {
@@ -114,9 +128,10 @@ static void downscale_to_det(void)
     }
 }
 
-/* Debug helper (currently unwired): dump the detector input over serial as
- * base64 so the exact image can be inspected off-board. */
-static void __attribute__((unused)) dump_det_frame(void)
+#ifdef CONFIG_THEREMIN_DUMP_FIRST_FRAME
+/* Dump the detector input over serial as base64 so the exact image can be
+ * inspected off-board — see CONFIG_THEREMIN_DUMP_FIRST_FRAME. */
+static void dump_det_frame(void)
 {
     printf("\nFRAMEDUMP BEGIN %d %d\n", DET_W, DET_H);
     const size_t chunk = 3000;
@@ -135,6 +150,7 @@ static void __attribute__((unused)) dump_det_frame(void)
     }
     printf("FRAMEDUMP END\n");
 }
+#endif
 
 /* expand the reliable center band [margin, 1-margin] to full [0,1] */
 static inline float remap_active(float v, float margin)
@@ -260,6 +276,11 @@ static void tracker_task(void *arg)
         if ((++frame_n & 1) == 0) {
             ui_preview_update(s_det_buf, DET_W, DET_H);
         }
+#ifdef CONFIG_THEREMIN_DUMP_FIRST_FRAME
+        if (frame_n == 30) {   /* let the camera settle a moment first */
+            dump_det_frame();
+        }
+#endif
 
         tracker_tuning_t tune = tracker_get_tuning();
         detector.set_score_thr(tune.score_thr);   /* cheap; simpler than a change check */
@@ -392,6 +413,8 @@ esp_err_t tracker_init(void)
     eng.timeout_ms = 100;
     if (jpeg_new_decoder_engine(&eng, &s_dec) != ESP_OK) {
         ESP_LOGE(TAG, "jpeg decoder engine failed");
+        vSemaphoreDelete(s_mutex);
+        vSemaphoreDelete(s_frame_ready);
         return ESP_FAIL;
     }
     jpeg_decode_memory_alloc_cfg_t rx = {};
@@ -403,6 +426,12 @@ esp_err_t tracker_init(void)
     s_det_buf = (uint8_t *)heap_caps_malloc(DET_W * DET_H * 3, MALLOC_CAP_SPIRAM);
     if (!s_decode_buf || !s_jpeg_in || !s_det_buf) {
         ESP_LOGE(TAG, "buffer alloc failed");
+        jpeg_del_decoder_engine(s_dec);
+        heap_caps_free(s_decode_buf);
+        heap_caps_free(s_jpeg_in);
+        heap_caps_free(s_det_buf);
+        vSemaphoreDelete(s_mutex);
+        vSemaphoreDelete(s_frame_ready);
         return ESP_ERR_NO_MEM;
     }
 

@@ -359,6 +359,10 @@ float synth_update_voice(int id, float freq_norm, float vol_norm, float openness
     float freq = quantize(map_frequency(freq_norm));
     float cutoff = FILTER_MIN + (FILTER_MAX - FILTER_MIN) * openness;
 
+    /* every other read/write of voice_t fields in this file holds s_lock;
+     * this scan was the one exception, racing the render task's own writes
+     * to active/releasing on another core */
+    taskENTER_CRITICAL(&s_lock);
     int voice_count = 0;
     for (int i = 0; i < SYNTH_NUM_VOICES; i++) {
         if (s_voices[i].active && !s_voices[i].releasing) {
@@ -368,6 +372,7 @@ float synth_update_voice(int id, float freq_norm, float vol_norm, float openness
     if (!v->active) {
         voice_count++;
     }
+    taskEXIT_CRITICAL(&s_lock);
     float vol = (vol_norm * 0.5f) / fmaxf(1.0f, voice_count * 0.7f);
 
     taskENTER_CRITICAL(&s_lock);
@@ -454,7 +459,13 @@ void synth_set_mode(synth_mode_t mode)
 }
 
 void synth_set_scale(synth_scale_t scale)  { s_scale = scale % SYNTH_SCALE_COUNT; }
-void synth_set_root(int midi_note)         { s_root = midi_note; }
+/* Clamped like synth_note_name()'s own MIDI range — unlike set_mode/set_scale
+ * this isn't a % COUNT wrap, since a corrupted/negative NVS-restored value
+ * would otherwise make quantize()'s `s_root % 12` go negative. */
+void synth_set_root(int midi_note)
+{
+    s_root = midi_note < 0 ? 0 : (midi_note > 127 ? 127 : midi_note);
+}
 void synth_set_glide(float seconds)        { s_glide = seconds; }
 void synth_set_clean_wave(bool saw_wave)   { s_clean_saw = saw_wave; }
 synth_mode_t synth_get_mode(void)          { return s_mode; }

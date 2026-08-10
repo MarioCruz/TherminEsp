@@ -1,8 +1,9 @@
 /*
  * TherminEsp — visual theremin on ESP32-S31-Korvo.
  *
- * Phase 1: on-device synth (port of Wavr's audio engine) played from the
- * touchscreen. The camera hand tracker replaces touch in a later phase.
+ * On-device synth (port of Wavr's audio engine) driven by up to two
+ * camera-tracked hands and the touchscreen simultaneously, each on its own
+ * voice — see SYNTH_VOICE_TOUCH in synth.h.
  */
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -41,7 +42,7 @@ static void synth_selftest(void)
 
 void app_main(void)
 {
-    ESP_LOGI(TAG, "=== TherminEsp phase 1 (touch theremin) ===");
+    ESP_LOGI(TAG, "=== TherminEsp ===");
     ESP_LOGI(TAG, "PSRAM pool: %u KiB",
              (unsigned)(heap_caps_get_total_size(MALLOC_CAP_SPIRAM) / 1024));
 
