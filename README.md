@@ -196,6 +196,7 @@ Things this board taught me the hard way — each one cost a debug cycle:
 - ✅ Tracker thresholds are runtime-tunable (`tracker_set_tuning()`) instead of reflash-to-adjust — nothing calls it yet (console commands or a debug screen are the natural next step)
 - ✅ CI — GitHub Actions builds the firmware on every push ([workflow](.github/workflows/build.yml))
 - ✅ The 2026-08-10 batch above is flashed and boot-verified on hardware — clean boot log, self-test + model self-test pass, physical buttons register correctly
+- 🔜 No known bugs remain. What's left — hands-on play testing, a known touch/camera display conflict, and the next round of features — is in **[TODO.md](TODO.md)**
 
 ## License
 
