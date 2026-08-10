@@ -182,7 +182,7 @@ Things this board taught me the hard way — each one cost a debug cycle:
 - ✅ Touch play — the screen is a playable instrument
 - ✅ Camera → decode → inference pipeline — 8 fps steady, model self-test passes at 0.92
 - 🔧 **Live hand detection** — blocked on physical camera image quality (lens focus + scene lighting); tap the **TherminEsp title** on screen to toggle a live view of exactly what the detector sees while you adjust the lens
-- 🔜 Openness-range tuning, multi-hand duet (the detector already returns multiple boxes)
+- 🔜 Openness-range tuning, multi-hand duet (the detector already returns multiple boxes) — full ranked punch-list in **[TODO.md](TODO.md)**
 
 ## Credits
 
