@@ -578,47 +578,56 @@ static void piano_event_cb(lv_event_t *e)
     int local_y = p.y - area.y1;
 
     /* check black keys first (they overlap and are on top) */
-    int hit_key = -1;
-    if (local_y < PIANO_BLACK_H) {
-        /* could be a black key — check each one */
+    int hit_key = -1;       /* white key index if >= 0 */
+    int hit_black = -1;     /* black key index if >= 0 */
+    if (local_y < PIANO_BLACK_H + 50) {  /* +50 for the top offset in piano_create */
         for (int i = 0; i < s_piano_num_blacks; i++) {
             lv_area_t ka;
             lv_obj_get_coords(s_piano_blacks[i], &ka);
             if (p.x >= ka.x1 && p.x <= ka.x2 && p.y >= ka.y1 && p.y <= ka.y2) {
-                /* black key hit — for now we don't have separate MIDI mapping
-                 * for black keys in scale modes, so treat as the nearest white key */
+                hit_black = i;
                 break;
             }
         }
     }
-    /* white key: simple X-based index */
-    if (hit_key < 0) {
-        hit_key = local_x / PIANO_KEY_W;
+    /* white key: simple X-based index (only if no black key was hit) */
+    if (hit_black < 0) {
+        hit_key = (local_x) / PIANO_KEY_W;
         if (hit_key < 0) hit_key = 0;
         if (hit_key >= PIANO_NUM_KEYS) hit_key = PIANO_NUM_KEYS - 1;
     }
 
-    /* un-highlight previous key, highlight new one */
-    if (hit_key != s_piano_key_active) {
-        if (s_piano_key_active >= 0 && s_piano_key_active < PIANO_NUM_KEYS) {
-            lv_obj_set_style_bg_color(s_piano_keys[s_piano_key_active],
-                                      lv_color_hex(COLOR_WHITE), 0);
-        }
-        s_piano_key_active = hit_key;
-        if (hit_key >= 0 && hit_key < PIANO_NUM_KEYS) {
-            lv_obj_set_style_bg_color(s_piano_keys[hit_key],
-                                      lv_color_hex(COLOR_CORAL), 0);
-        }
+    /* Compute the MIDI note for whichever key was hit */
+    int midi;
+    if (hit_black >= 0) {
+        /* Black key: map index to semitone offset from root.
+         * Pattern per octave: C#(1), D#(3), F#(6), G#(8), A#(10) */
+        static const int black_semitones[5] = { 1, 3, 6, 8, 10 };
+        int oct = hit_black / 5;
+        int idx = hit_black % 5;
+        midi = synth_get_root() + oct * 12 + black_semitones[idx];
+    } else {
+        midi = piano_key_to_midi(hit_key);
+    }
+
+    /* un-highlight previous white key */
+    if (s_piano_key_active >= 0 && s_piano_key_active < PIANO_NUM_KEYS) {
+        lv_obj_set_style_bg_color(s_piano_keys[s_piano_key_active],
+                                  lv_color_hex(COLOR_WHITE), 0);
+    }
+    s_piano_key_active = (hit_black >= 0) ? -1 : hit_key;
+    if (hit_key >= 0 && hit_key < PIANO_NUM_KEYS) {
+        lv_obj_set_style_bg_color(s_piano_keys[hit_key],
+                                  lv_color_hex(COLOR_CORAL), 0);
     }
 
     /* play the note */
-    int midi = piano_key_to_midi(hit_key);
     float freq = midi_to_freq_ui(midi);
     /* normalize freq to [0,1] range for the synth (C2=65 → C6=1047) */
     float freq_norm = log2f(freq / 65.0f) / log2f(1047.0f / 65.0f);
     freq_norm = freq_norm < 0.0f ? 0.0f : (freq_norm > 1.0f ? 1.0f : freq_norm);
     /* Y position controls volume in piano mode too */
-    float vol = 1.0f - ((float)local_y / (float)PIANO_KEY_H);
+    float vol = 1.0f - ((float)local_y / (float)(PIANO_KEY_H + 50));
     vol = vol < 0.1f ? 0.1f : (vol > 1.0f ? 1.0f : vol);
 
     float actual_freq = synth_update_voice(SYNTH_VOICE_TOUCH, freq_norm, vol, 1.0f);
