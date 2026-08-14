@@ -89,7 +89,7 @@ Runs on the **ESP32-S31-Korvo-1** dev board — everything needed is on it:
 | Two hands | **Duet** | Each hand gets its own independent voice, matched frame-to-frame so identity mostly survives hands crossing |
 | **Touchscreen** | Same pitch/volume | X = pitch, Y = volume — its own voice, so it plays alongside a tracked hand rather than fighting it. Works even with the camera covered |
 
-On-screen: live note name, frequency, volume, and a marker that follows your (primary) hand, plus buttons to cycle through **7 synth modes** (long-press while on Clean Wave to swap sine/sawtooth), **10 musical scales**, **12 root notes**, and **4 glide presets**. The board's 4 physical buttons mirror those same four controls if you'd rather not touch the screen (long-press MODE toggles sine/sawtooth too). In duet mode, a second teal marker tracks hand 1 alongside the primary coral marker. The status LED shifts from coral to sky-blue as pitch rises (Beach Boys palette, carried over from Wavr). Every setting survives a reboot.
+On-screen: live note name, frequency, volume, and a marker that follows your (primary) hand, plus buttons to cycle through **8 synth modes** (long-press while on Clean Wave to swap sine/sawtooth), **10 musical scales**, **12 root notes**, and **4 glide presets**. The board's 4 physical buttons mirror those same four controls if you'd rather not touch the screen (long-press MODE toggles sine/sawtooth too). In duet mode, a second teal marker tracks hand 1 alongside the primary coral marker. The status LED shifts from coral to sky-blue as pitch rises (Beach Boys palette, carried over from Wavr). Every setting survives a reboot.
 
 ## Architecture
 
@@ -100,7 +100,7 @@ On-screen: live note name, frequency, volume, and a marker that follows your (pr
  (720p      │  ├─ camera task (V4L2 dequeue)     ├─ synth task (prio MAX-3) │
   JPEG,     │  ├─ LVGL / touch / UI              │    3 voices (2 hands     │
   17 fps)   │  │    surface_event_cb ─────────▶  │    + 1 touch)            │
-            │  │    ├─ 4 touchscreen buttons     │    7 modes · 10 scales   │
+            │  │    ├─ 4 touchscreen buttons     │    8 modes · 10 scales   │
             │  │    └─ coral + teal markers      │    PolyBLEP oscillators  │
             │  ├─ buttons task (iot_button)       │    biquad filter · glide │
             │  │    └─ 4 ADC buttons ─────────▶  │    48 kHz blocks ──▶ I2S │──▶ ES8389 ──▶ 🔊
@@ -127,6 +127,7 @@ A sample-accurate C port of Wavr's Web Audio graph. Phase-accumulator oscillator
 - **Theremin** — sine with 5.5 Hz vibrato scaled to pitch
 - **Organ** — additive 1st + 2nd + 3rd harmonics
 - **Bitcrush** — sawtooth through an 8-step staircase quantizer
+- **Piano** — Rhodes-style 2-operator FM with a struck-key decay envelope (bright attack mellows into a warm bell)
 
 All modes share an RBJ lowpass biquad (Q=2) for the fist/open filter, linear parameter ramps to prevent clicks, scale quantization across 3 octaves, and glide (portamento). A boot self-test sweeps every mode C2→C6 through the codec — if you have speakers connected you get a little demo at every power-on.
 
@@ -167,7 +168,7 @@ The first build downloads the managed components (ESP-DL, hand_detect, LVGL, esp
 ```
 main/
 ├── main.c            boot sequence + synth self-test
-├── synth.c/.h        the 7-mode DSP engine (port of Wavr's audio-engine.js)
+├── synth.c/.h        the 8-mode DSP engine (port of Wavr's audio-engine.js)
 ├── tracker.cpp/.h    JPEG decode → espdet-pico → multi-hand gesture mapping
 ├── camera.c/.h       V4L2 capture task (720p JPEG)
 ├── ui.c/.h           LVGL touchscreen UI + hidden camera debug view
@@ -194,7 +195,7 @@ Things this board taught me the hard way — each one cost a debug cycle:
 
 ## Status
 
-- ✅ Synth engine — all 7 modes verified on hardware, every boot; root note, glide (4 presets), and Clean Wave's sine/sawtooth are all playable now, not just wired into the engine
+- ✅ Synth engine — all 8 modes verified on hardware, every boot; root note, glide (4 presets), and Clean Wave's sine/sawtooth are all playable now, not just wired into the engine
 - ✅ **PolyBLEP oscillators** — sawtooth and triangle waveforms are band-limited for clean output in the top octave (Clean Wave, Warm Tone, Pad); Bitcrush intentionally keeps the naive aliasing saw
 - ✅ Touch play — the screen is a playable instrument, on its own dedicated voice so it never fights a tracked hand for the same note
 - ✅ Live hand detection — working end to end (camera aim + lighting were the last blocker; solved by propping the board so the camera faces the player, not the ceiling)

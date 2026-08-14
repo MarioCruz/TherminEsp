@@ -25,6 +25,7 @@ typedef enum {
     SYNTH_MODE_THEREMIN,
     SYNTH_MODE_ORGAN,
     SYNTH_MODE_BITCRUSH,
+    SYNTH_MODE_PIANO,
     SYNTH_MODE_COUNT,
 } synth_mode_t;
 
@@ -71,6 +72,11 @@ void synth_note_name(float freq, char *buf);
 
 /* Pitch class name ("C", "C#", ...) for any MIDI note, octave ignored. */
 const char *synth_pitch_class_name(int midi_note);
+
+/* Scale info: number of degrees in the current scale, and the semitone
+ * offset for a given degree (0-indexed). Used by the piano keyboard. */
+int synth_scale_len(void);
+int synth_scale_semitone(int degree);
 
 #ifdef __cplusplus
 }

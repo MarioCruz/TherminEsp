@@ -30,6 +30,12 @@ static void mode_long_cb(void *btn, void *user_data)
     ui_toggle_clean_wave();
 }
 
+/* Long-press on SET toggles between Theremin and Piano keyboard modes. */
+static void set_long_cb(void *btn, void *user_data)
+{
+    ui_toggle_app_mode();
+}
+
 esp_err_t buttons_init(void)
 {
     button_handle_t btns[BSP_BUTTON_NUM];
@@ -45,6 +51,10 @@ esp_err_t buttons_init(void)
     /* long-press on MODE (index BSP_BUTTON_MODE) toggles Clean Wave's sine/saw */
     if (btn_cnt > (int)BSP_BUTTON_MODE) {
         iot_button_register_cb(btns[BSP_BUTTON_MODE], BUTTON_LONG_PRESS_START, NULL, mode_long_cb, NULL);
+    }
+    /* long-press on SET toggles between Theremin and Piano keyboard */
+    if (btn_cnt > (int)BSP_BUTTON_SET) {
+        iot_button_register_cb(btns[BSP_BUTTON_SET], BUTTON_LONG_PRESS_START, NULL, set_long_cb, NULL);
     }
     ESP_LOGI(TAG, "%d physical buttons registered", btn_cnt);
     return ESP_OK;

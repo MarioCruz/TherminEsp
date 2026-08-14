@@ -45,6 +45,20 @@ static bool s_touch_active;
 static bool s_hand0_active;
 static bool s_hand1_active;
 
+/* ---- Piano keyboard mode ---- */
+typedef enum { APP_MODE_THEREMIN = 0, APP_MODE_PIANO } app_mode_t;
+static app_mode_t s_app_mode = APP_MODE_THEREMIN;
+static lv_obj_t *s_piano;            /* piano keyboard container (sibling of s_surface) */
+#define PIANO_NUM_KEYS  14           /* 2 octaves of white keys */
+#define PIANO_KEY_W     38           /* white key width */
+#define PIANO_KEY_H     320          /* white key height */
+#define PIANO_BLACK_W   26           /* black key width */
+#define PIANO_BLACK_H   200          /* black key height */
+static lv_obj_t *s_piano_keys[PIANO_NUM_KEYS];   /* white key objects */
+static lv_obj_t *s_piano_blacks[10]; /* up to 10 black keys in 2 octaves */
+static int s_piano_num_blacks;
+static int s_piano_key_active = -1;  /* currently-pressed key index, -1 = none */
+
 static const struct { const char *label; float seconds; } GLIDE_PRESETS[] = {
     { "Glide: Snap",  0.0f },
     { "Glide: Fast",  0.08f },
@@ -231,6 +245,10 @@ static void mode_btn_long_cb(lv_event_t *e) { ui_toggle_clean_wave(); }
 static void scale_btn_cb(lv_event_t *e)     { ui_cycle_scale(); }
 static void root_btn_cb(lv_event_t *e)      { ui_cycle_root(); }
 static void glide_btn_cb(lv_event_t *e)     { ui_cycle_glide(); }
+
+/* forward declarations */
+static void piano_create(lv_obj_t *parent);
+static int piano_key_to_midi(int key_idx);
 
 /* tap the title to toggle the camera debug view */
 static void title_cb(lv_event_t *e)
@@ -481,7 +499,225 @@ esp_err_t ui_init(void)
     make_button(panel, GLIDE_PRESETS[s_glide_idx].label, COLOR_NAVY,
                 glide_btn_cb, &s_glide_btn_label);
 
+    /* piano keyboard (hidden by default, toggled with long-press SET) */
+    piano_create(scr);
+
     bsp_display_unlock();
     ESP_LOGI(TAG, "theremin screen up");
     return ESP_OK;
+}
+
+/* ---- Piano keyboard implementation ---- */
+
+/* Map a white-key index (0..PIANO_NUM_KEYS-1) to a MIDI note based on the
+ * current root and scale. In chromatic mode, white keys are C D E F G A B;
+ * in other scales, white keys step through scale degrees. */
+static int piano_key_to_midi(int key_idx)
+{
+    int root = synth_get_root();
+    synth_scale_t scale = synth_get_scale();
+    if (scale == SYNTH_SCALE_CHROMATIC) {
+        /* standard piano layout: white keys are the natural notes */
+        static const int white_semitones[7] = { 0, 2, 4, 5, 7, 9, 11 };
+        int octave = key_idx / 7;
+        int degree = key_idx % 7;
+        return root + octave * 12 + white_semitones[degree];
+    }
+    /* For non-chromatic scales, each key is one scale degree — you can't
+     * play a wrong note, same as the theremin mode. */
+    int scale_len = synth_scale_len();
+    int octave = key_idx / scale_len;
+    int degree = key_idx % scale_len;
+    int root_pc = root % 12;
+    int root_octave = root / 12;
+    return (root_octave + octave) * 12 + root_pc + synth_scale_semitone(degree);
+}
+
+/* Convert MIDI note to frequency (equal temperament) */
+static float midi_to_freq_ui(int midi)
+{
+    return 440.0f * powf(2.0f, (midi - 69.0f) / 12.0f);
+}
+
+static void piano_event_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+
+    if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
+        synth_stop_voice(SYNTH_VOICE_TOUCH);
+        /* un-highlight the active key */
+        if (s_piano_key_active >= 0 && s_piano_key_active < PIANO_NUM_KEYS) {
+            lv_obj_set_style_bg_color(s_piano_keys[s_piano_key_active],
+                                      lv_color_hex(COLOR_WHITE), 0);
+        }
+        s_piano_key_active = -1;
+        lv_label_set_text(s_note_label, "--");
+        lv_label_set_text(s_freq_label, "-- Hz");
+        lv_label_set_text(s_vol_label, "vol --");
+        return;
+    }
+    if (code != LV_EVENT_PRESSED && code != LV_EVENT_PRESSING) {
+        return;
+    }
+
+    lv_indev_t *indev = lv_indev_active();
+    if (!indev) {
+        return;
+    }
+    lv_point_t p;
+    lv_indev_get_point(indev, &p);
+
+    /* determine which key was hit based on X position within the piano */
+    lv_area_t area;
+    lv_obj_get_coords(s_piano, &area);
+    int local_x = p.x - area.x1;
+    int local_y = p.y - area.y1;
+
+    /* check black keys first (they overlap and are on top) */
+    int hit_key = -1;
+    if (local_y < PIANO_BLACK_H) {
+        /* could be a black key — check each one */
+        for (int i = 0; i < s_piano_num_blacks; i++) {
+            lv_area_t ka;
+            lv_obj_get_coords(s_piano_blacks[i], &ka);
+            if (p.x >= ka.x1 && p.x <= ka.x2 && p.y >= ka.y1 && p.y <= ka.y2) {
+                /* black key hit — for now we don't have separate MIDI mapping
+                 * for black keys in scale modes, so treat as the nearest white key */
+                break;
+            }
+        }
+    }
+    /* white key: simple X-based index */
+    if (hit_key < 0) {
+        hit_key = local_x / PIANO_KEY_W;
+        if (hit_key < 0) hit_key = 0;
+        if (hit_key >= PIANO_NUM_KEYS) hit_key = PIANO_NUM_KEYS - 1;
+    }
+
+    /* un-highlight previous key, highlight new one */
+    if (hit_key != s_piano_key_active) {
+        if (s_piano_key_active >= 0 && s_piano_key_active < PIANO_NUM_KEYS) {
+            lv_obj_set_style_bg_color(s_piano_keys[s_piano_key_active],
+                                      lv_color_hex(COLOR_WHITE), 0);
+        }
+        s_piano_key_active = hit_key;
+        if (hit_key >= 0 && hit_key < PIANO_NUM_KEYS) {
+            lv_obj_set_style_bg_color(s_piano_keys[hit_key],
+                                      lv_color_hex(COLOR_CORAL), 0);
+        }
+    }
+
+    /* play the note */
+    int midi = piano_key_to_midi(hit_key);
+    float freq = midi_to_freq_ui(midi);
+    /* normalize freq to [0,1] range for the synth (C2=65 → C6=1047) */
+    float freq_norm = log2f(freq / 65.0f) / log2f(1047.0f / 65.0f);
+    freq_norm = freq_norm < 0.0f ? 0.0f : (freq_norm > 1.0f ? 1.0f : freq_norm);
+    /* Y position controls volume in piano mode too */
+    float vol = 1.0f - ((float)local_y / (float)PIANO_KEY_H);
+    vol = vol < 0.1f ? 0.1f : (vol > 1.0f ? 1.0f : vol);
+
+    float actual_freq = synth_update_voice(SYNTH_VOICE_TOUCH, freq_norm, vol, 1.0f);
+
+    char note[8];
+    synth_note_name(actual_freq, note);
+    lv_label_set_text(s_note_label, note);
+    lv_label_set_text_fmt(s_freq_label, "%d Hz", (int)actual_freq);
+    lv_label_set_text_fmt(s_vol_label, "vol %d%%", (int)(vol * 100));
+    led_from_pitch(freq_norm);
+}
+
+static void piano_create(lv_obj_t *parent)
+{
+    s_piano = lv_obj_create(parent);
+    lv_obj_set_size(s_piano, 540, 420);
+    lv_obj_align(s_piano, LV_ALIGN_BOTTOM_LEFT, 12, -12);
+    lv_obj_set_style_bg_color(s_piano, lv_color_hex(0x222222), 0);
+    lv_obj_set_style_radius(s_piano, 12, 0);
+    lv_obj_set_style_border_width(s_piano, 2, 0);
+    lv_obj_set_style_border_color(s_piano, lv_color_hex(COLOR_TEAL), 0);
+    lv_obj_set_style_pad_all(s_piano, 4, 0);
+    lv_obj_clear_flag(s_piano, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_piano, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_piano, piano_event_cb, LV_EVENT_ALL, NULL);
+
+    /* draw white keys */
+    for (int i = 0; i < PIANO_NUM_KEYS; i++) {
+        lv_obj_t *key = lv_obj_create(s_piano);
+        lv_obj_set_size(key, PIANO_KEY_W - 2, PIANO_KEY_H);
+        lv_obj_set_pos(key, i * PIANO_KEY_W, 50);
+        lv_obj_set_style_bg_color(key, lv_color_hex(COLOR_WHITE), 0);
+        lv_obj_set_style_radius(key, 4, 0);
+        lv_obj_set_style_border_width(key, 1, 0);
+        lv_obj_set_style_border_color(key, lv_color_hex(0x999999), 0);
+        lv_obj_clear_flag(key, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+
+        /* note label at bottom of key */
+        lv_obj_t *lbl = lv_label_create(key);
+        int midi = piano_key_to_midi(i);
+        char note[8];
+        synth_note_name(midi_to_freq_ui(midi), note);
+        lv_label_set_text(lbl, note);
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(lbl, lv_color_hex(COLOR_NAVY), 0);
+        lv_obj_align(lbl, LV_ALIGN_BOTTOM_MID, 0, -8);
+        s_piano_keys[i] = key;
+    }
+
+    /* draw black keys (chromatic pattern) — only in chromatic mode for now.
+     * In scale modes, all keys are "white" (each = one scale degree). */
+    s_piano_num_blacks = 0;
+    if (synth_get_scale() == SYNTH_SCALE_CHROMATIC) {
+        /* black key positions within one octave: after keys 0,1,3,4,5 (C#,D#,F#,G#,A#) */
+        static const int black_after[5] = { 0, 1, 3, 4, 5 };
+        for (int oct = 0; oct < 2 && s_piano_num_blacks < 10; oct++) {
+            for (int b = 0; b < 5 && s_piano_num_blacks < 10; b++) {
+                int white_idx = oct * 7 + black_after[b];
+                if (white_idx + 1 >= PIANO_NUM_KEYS) break;
+                lv_obj_t *bk = lv_obj_create(s_piano);
+                lv_obj_set_size(bk, PIANO_BLACK_W, PIANO_BLACK_H);
+                int x = (white_idx + 1) * PIANO_KEY_W - PIANO_BLACK_W / 2;
+                lv_obj_set_pos(bk, x, 50);
+                lv_obj_set_style_bg_color(bk, lv_color_hex(COLOR_NAVY), 0);
+                lv_obj_set_style_radius(bk, 4, 0);
+                lv_obj_set_style_border_width(bk, 0, 0);
+                lv_obj_clear_flag(bk, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+                s_piano_blacks[s_piano_num_blacks++] = bk;
+            }
+        }
+    }
+
+    /* mode label at top */
+    lv_obj_t *mode_lbl = lv_label_create(s_piano);
+    lv_label_set_text(mode_lbl, "Piano Keyboard");
+    lv_obj_set_style_text_font(mode_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(mode_lbl, lv_color_hex(COLOR_TEAL), 0);
+    lv_obj_align(mode_lbl, LV_ALIGN_TOP_MID, 0, 8);
+
+    /* start hidden */
+    lv_obj_add_flag(s_piano, LV_OBJ_FLAG_HIDDEN);
+}
+
+void ui_toggle_app_mode(void)
+{
+    if (!bsp_display_lock(-1)) {
+        return;
+    }
+    if (s_app_mode == APP_MODE_THEREMIN) {
+        s_app_mode = APP_MODE_PIANO;
+        lv_obj_add_flag(s_surface, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_piano, LV_OBJ_FLAG_HIDDEN);
+        /* stop any active theremin touch voice */
+        synth_stop_voice(SYNTH_VOICE_TOUCH);
+        ESP_LOGI(TAG, "app mode -> Piano Keyboard");
+    } else {
+        s_app_mode = APP_MODE_THEREMIN;
+        lv_obj_clear_flag(s_surface, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_piano, LV_OBJ_FLAG_HIDDEN);
+        /* stop any active piano key */
+        synth_stop_voice(SYNTH_VOICE_TOUCH);
+        s_piano_key_active = -1;
+        ESP_LOGI(TAG, "app mode -> Theremin");
+    }
+    bsp_display_unlock();
 }

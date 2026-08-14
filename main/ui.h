@@ -15,6 +15,10 @@ extern "C" {
 /* Build the screen. Call after bsp_display_start() and synth_init(). */
 esp_err_t ui_init(void);
 
+/* Toggle between Theremin (hand-wave surface) and Piano (on-screen keys).
+ * Safe to call from any task (takes the display lock). */
+void ui_toggle_app_mode(void);
+
 /* Show the camera-tracked hand on the play surface. Safe to call from any
  * task (takes the LVGL lock). slot 0 = primary hand (coral marker + readout),
  * slot 1 = secondary hand (teal marker, no readout change). x/y normalized

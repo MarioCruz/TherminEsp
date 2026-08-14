@@ -52,6 +52,11 @@ typedef struct {
                                          * re-entry never memsets a buffer
                                          * the render task is concurrently
                                          * reading/writing from another core */
+    /* piano envelope state (attack-decay, reset on note-on) */
+    float env_level;                   /* current envelope amplitude [0,1] */
+    float env_attack_rate;             /* per-sample rise during attack */
+    float env_decay_rate;              /* per-sample fall during decay */
+    bool env_attacking;                /* true during the short attack phase */
     bool active;
     bool releasing;                    /* fading to silence, free when done */
 } voice_t;
@@ -74,7 +79,7 @@ static const struct {
 };
 
 static const char *MODE_NAMES[SYNTH_MODE_COUNT] = {
-    "FM Synth", "Clean Wave", "Warm Tone", "Pad", "Theremin", "Organ", "Bitcrush",
+    "FM Synth", "Clean Wave", "Warm Tone", "Pad", "Theremin", "Organ", "Bitcrush", "Piano",
 };
 
 static voice_t s_voices[SYNTH_NUM_VOICES];
@@ -288,6 +293,31 @@ static float voice_sample(voice_t *v, synth_mode_t mode)
         out = roundf(x * 8.0f) / 8.0f;
         break;
     }
+    case SYNTH_MODE_PIANO: {
+        /* Rhodes-style FM electric piano: sine carrier at f, sine modulator
+         * at 2f (like the FM mode), but the modulation index decays with the
+         * envelope — bright attack that mellows into a warm bell tone. The
+         * envelope is a fast attack (~5 ms) into an exponential decay
+         * (~1.5 s), giving the struck-key character of a real piano. */
+        if (v->env_attacking) {
+            v->env_level += v->env_attack_rate;
+            if (v->env_level >= 1.0f) {
+                v->env_level = 1.0f;
+                v->env_attacking = false;
+            }
+        } else {
+            v->env_level *= v->env_decay_rate;
+        }
+        /* modulation index decays faster than amplitude for timbral
+         * evolution: bright hammer strike → mellow sustain */
+        float mod_env = v->env_level * v->env_level;  /* squared = faster decay */
+        float mod_index = f * 1.5f * mod_env;
+        float mod = sinf(v->ph2) * mod_index;
+        out = sinf(v->ph1) * v->env_level;
+        v->ph1 += phase_step(f + mod);
+        v->ph2 += phase_step(f * 2.0f);
+        break;
+    }
     default:
         break;
     }
@@ -433,12 +463,25 @@ float synth_update_voice(int id, float freq_norm, float vol_norm, float openness
         v->cutoff_coeff = -1.0f;
         v->ph1 = v->ph2 = v->ph3 = v->ph_lfo = 0.0f;
         v->z1_l = v->z2_l = 0.0f;
+        /* piano envelope: ~5 ms attack, ~1.5 s decay */
+        v->env_level = 0.0f;
+        v->env_attacking = true;
+        v->env_attack_rate = 1.0f / (0.005f * SAMPLE_RATE);  /* 5 ms to peak */
+        v->env_decay_rate = 1.0f - (3.0f / SAMPLE_RATE);     /* ~1.5 s -60 dB */
         v->active = true;
     }
     v->releasing = false;
     v->freq_tgt = freq;
     v->gain_tgt = vol;
     v->cutoff_tgt = cutoff;
+    /* In Piano mode, retrigger the envelope when the player moves to a
+     * different note — simulates striking a new key. A semitone (~6%) is
+     * the threshold so glide/vibrato doesn't constantly retrigger. */
+    if (s_mode == SYNTH_MODE_PIANO && v->active &&
+        fabsf(freq - v->freq_cur) > v->freq_cur * 0.05f) {
+        v->env_level = 0.0f;
+        v->env_attacking = true;
+    }
     taskEXIT_CRITICAL(&s_lock);
 
     if (s_mode == SYNTH_MODE_WARM && !v->delay) {
@@ -546,4 +589,17 @@ void synth_note_name(float freq, char *buf)
 const char *synth_pitch_class_name(int midi_note)
 {
     return NOTE_NAMES[((midi_note % 12) + 12) % 12];
+}
+
+int synth_scale_len(void)
+{
+    return SCALES[s_scale].len;
+}
+
+int synth_scale_semitone(int degree)
+{
+    if (degree < 0 || degree >= SCALES[s_scale].len) {
+        return 0;
+    }
+    return SCALES[s_scale].notes[degree];
 }
