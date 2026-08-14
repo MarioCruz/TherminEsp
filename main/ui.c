@@ -156,6 +156,12 @@ static void mode_btn_refresh_label(void)
     }
 }
 
+/* forward declarations for piano keyboard (defined after ui_init) */
+static void piano_create(lv_obj_t *parent);
+static void piano_refresh_keys(void);
+static int piano_key_to_midi(int key_idx);
+static float midi_to_freq_ui(int midi);
+
 /* ui_cycle_*()/ui_toggle_clean_wave() are the single source of truth for
  * "a control changed": they touch the synth, refresh the label, and mark
  * settings dirty. Both the touchscreen buttons and main/buttons.c (the
@@ -209,6 +215,7 @@ void ui_cycle_scale(void)
     synth_scale_t next = (synth_get_scale() + 1) % SYNTH_SCALE_COUNT;
     synth_set_scale(next);
     lv_label_set_text(s_scale_btn_label, synth_scale_name(next));
+    piano_refresh_keys();
     bsp_display_unlock();
     settings_mark_dirty();
     ESP_LOGI(TAG, "scale -> %s", synth_scale_name(next));
@@ -222,6 +229,7 @@ void ui_cycle_root(void)
     int next_root = 48 + ((synth_get_root() % 12) + 1) % 12;
     synth_set_root(next_root);
     lv_label_set_text(s_root_btn_label, synth_pitch_class_name(next_root));
+    piano_refresh_keys();
     bsp_display_unlock();
     settings_mark_dirty();
     ESP_LOGI(TAG, "root -> %s", synth_pitch_class_name(next_root));
@@ -245,10 +253,6 @@ static void mode_btn_long_cb(lv_event_t *e) { ui_toggle_clean_wave(); }
 static void scale_btn_cb(lv_event_t *e)     { ui_cycle_scale(); }
 static void root_btn_cb(lv_event_t *e)      { ui_cycle_root(); }
 static void glide_btn_cb(lv_event_t *e)     { ui_cycle_glide(); }
-
-/* forward declarations */
-static void piano_create(lv_obj_t *parent);
-static int piano_key_to_midi(int key_idx);
 
 /* tap the title to toggle the camera debug view */
 static void title_cb(lv_event_t *e)
@@ -696,6 +700,52 @@ static void piano_create(lv_obj_t *parent)
 
     /* start hidden */
     lv_obj_add_flag(s_piano, LV_OBJ_FLAG_HIDDEN);
+}
+
+/* Refresh piano key labels and black keys after scale or root changes.
+ * Must be called under the display lock. */
+static void piano_refresh_keys(void)
+{
+    if (!s_piano) {
+        return;
+    }
+    /* update white key labels */
+    for (int i = 0; i < PIANO_NUM_KEYS; i++) {
+        lv_obj_t *key = s_piano_keys[i];
+        /* the label is the first (and only) child of the key */
+        lv_obj_t *lbl = lv_obj_get_child(key, 0);
+        if (lbl) {
+            int midi = piano_key_to_midi(i);
+            char note[8];
+            synth_note_name(midi_to_freq_ui(midi), note);
+            lv_label_set_text(lbl, note);
+        }
+    }
+    /* remove old black keys */
+    for (int i = 0; i < s_piano_num_blacks; i++) {
+        lv_obj_delete(s_piano_blacks[i]);
+        s_piano_blacks[i] = NULL;
+    }
+    s_piano_num_blacks = 0;
+    /* recreate black keys if chromatic */
+    if (synth_get_scale() == SYNTH_SCALE_CHROMATIC) {
+        static const int black_after[5] = { 0, 1, 3, 4, 5 };
+        for (int oct = 0; oct < 2 && s_piano_num_blacks < 10; oct++) {
+            for (int b = 0; b < 5 && s_piano_num_blacks < 10; b++) {
+                int white_idx = oct * 7 + black_after[b];
+                if (white_idx + 1 >= PIANO_NUM_KEYS) break;
+                lv_obj_t *bk = lv_obj_create(s_piano);
+                lv_obj_set_size(bk, PIANO_BLACK_W, PIANO_BLACK_H);
+                int x = (white_idx + 1) * PIANO_KEY_W - PIANO_BLACK_W / 2;
+                lv_obj_set_pos(bk, x, 50);
+                lv_obj_set_style_bg_color(bk, lv_color_hex(COLOR_NAVY), 0);
+                lv_obj_set_style_radius(bk, 4, 0);
+                lv_obj_set_style_border_width(bk, 0, 0);
+                lv_obj_clear_flag(bk, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+                s_piano_blacks[s_piano_num_blacks++] = bk;
+            }
+        }
+    }
 }
 
 void ui_toggle_app_mode(void)

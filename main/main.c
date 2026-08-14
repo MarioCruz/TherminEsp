@@ -14,6 +14,7 @@
 #include "bsp/led.h"
 #include "buttons.h"
 #include "camera.h"
+#include "recorder.h"
 #include "settings.h"
 #include "synth.h"
 #include "tracker.h"
@@ -68,6 +69,7 @@ void app_main(void)
     settings_load();
     ESP_ERROR_CHECK(ui_init());
     buttons_init();     /* non-fatal if unavailable — logs its own warning */
+    recorder_init();   /* non-fatal if no SD card */
 
     /* Hand tracking: camera frames -> JPEG decode -> espdet-pico -> voice 0.
      * If either fails, the touchscreen still plays. */

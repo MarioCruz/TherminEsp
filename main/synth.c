@@ -20,6 +20,7 @@
 #include "esp_log.h"
 
 #include "bsp/audio.h"
+#include "recorder.h"
 
 static const char *TAG = "synth";
 
@@ -403,6 +404,9 @@ static void synth_task(void *arg)
 
         /* blocking write paces the loop at the codec's 48 kHz */
         esp_codec_dev_write(s_speaker, block, BLOCK_FRAMES * 2 * sizeof(int16_t));
+
+        /* feed the SD card recorder (no-op if not recording) */
+        recorder_feed(block, BLOCK_FRAMES * 2 * sizeof(int16_t));
     }
 }
 

@@ -5,6 +5,7 @@
 #include "esp_log.h"
 
 #include "bsp/button.h"
+#include "recorder.h"
 #include "ui.h"
 
 static const char *TAG = "buttons";
@@ -36,6 +37,12 @@ static void set_long_cb(void *btn, void *user_data)
     ui_toggle_app_mode();
 }
 
+/* Long-press on VOLUP toggles WAV recording to the SD card. */
+static void volup_long_cb(void *btn, void *user_data)
+{
+    recorder_toggle();
+}
+
 esp_err_t buttons_init(void)
 {
     button_handle_t btns[BSP_BUTTON_NUM];
@@ -55,6 +62,10 @@ esp_err_t buttons_init(void)
     /* long-press on SET toggles between Theremin and Piano keyboard */
     if (btn_cnt > (int)BSP_BUTTON_SET) {
         iot_button_register_cb(btns[BSP_BUTTON_SET], BUTTON_LONG_PRESS_START, NULL, set_long_cb, NULL);
+    }
+    /* long-press on VOLUP toggles WAV recording to SD card */
+    if (btn_cnt > (int)BSP_BUTTON_VOLUP) {
+        iot_button_register_cb(btns[BSP_BUTTON_VOLUP], BUTTON_LONG_PRESS_START, NULL, volup_long_cb, NULL);
     }
     ESP_LOGI(TAG, "%d physical buttons registered", btn_cnt);
     return ESP_OK;
