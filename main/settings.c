@@ -86,6 +86,7 @@ void settings_load(void)
         synth_set_root(i32);
     }
     if (nvs_get_i32(s_handle, KEY_GLIDE_MS, &i32) == ESP_OK) {
+        if (i32 < 0) i32 = 0;
         synth_set_glide(i32 / 1000.0f);
     }
     if (nvs_get_u8(s_handle, KEY_CLEAN_SAW, &u8) == ESP_OK) {

@@ -1,6 +1,6 @@
 # TherminEsp — TODO
 
-**No known bugs.** Everything two review passes turned up is fixed, built clean, and flashed (`880dcce`). No `TODO`/`FIXME` markers left in the source. What follows is verification that needs a human, one deliberately-deferred defect, and things worth building next.
+**No known bugs.** Three concurrency fixes (delay allocation race, NVS glide clamp, phase_wrap negative handling) shipped in the 2026-08-14 batch alongside the feature work below. No `TODO`/`FIXME` markers left in the source.
 
 ---
 
@@ -13,6 +13,7 @@ The newest and least-exercised code path (`assign_detections()` in `main/tracker
 - Both hands in frame → two independent notes, each tracking its own hand
 - **Cross your hands** and watch for identity swapping — the nearest-previous-position matching is a heuristic, and a swap would be audible as the two voices trading pitches
 - Take one hand out of frame → that voice alone should fade, the other keeps playing
+- Each hand now gets its own on-screen marker (coral for hand 0, teal for hand 1) — verify they track correctly
 
 ### 1.2 Settings persistence across a power-cycle
 Change mode/scale/root/glide, wait ~3 s (the NVS debounce is 2 s), then pull power and reboot. All four should come back. Watch the boot log for `settings` warnings if they don't.
@@ -21,9 +22,15 @@ Change mode/scale/root/glide, wait ~3 s (the NVS debounce is 2 s), then pull pow
 Switch into Warm Tone while a note is sounding. Should get the reverb tail immediately, with **no ~150 ms ghost of a previous session's audio** — that's what the `delay_reset_pending` fix (README lesson #10) was for, and it has never been specifically exercised.
 
 ### 1.4 Touch + camera together
-Track a hand, then touch-drag simultaneously → two independent notes. Release touch → the camera's note must keep playing. (Note the known display bug in 2.1 below will make the *screen* lie here even when the *audio* is correct.)
+Track a hand, then touch-drag simultaneously → two independent notes. Release touch → the camera's note must keep playing and the display should still show the camera hand's readout (the display fight fix means the hint no longer incorrectly appears).
 
-### 1.5 The smaller ones
+### 1.5 PolyBLEP audio quality
+Play Clean Saw and Pad in the C5–C6 range. Listen for aliasing artifacts compared to the sine — the PolyBLEP should make the sawtooth noticeably cleaner than a naive saw would be at those frequencies.
+
+### 1.6 Physical button long-press
+While on Clean Wave mode, long-press the MODE button — it should toggle sine/sawtooth (same as the touchscreen button long-press). Short-press should still cycle modes.
+
+### 1.7 The smaller ones
 - Marker Y position visually matches the volume you hear as you raise/lower your hand
 - Cover the lens or unplug the camera before boot → the "camera off — touch to play" hint appears instead of the normal hint
 
@@ -31,17 +38,11 @@ Track a hand, then touch-drag simultaneously → two independent notes. Release 
 
 ## Tier 2 — Known gaps worth closing
 
-### 2.1 Touch and camera fight over the on-screen display
-- **Where:** `main/ui.c` — `ui_hand_update()` (camera path) and `surface_event_cb()` (touch path)
-- **Problem:** Both drive the *same* `s_hint_label` visibility and `s_marker`. Whichever wrote last wins, so **releasing touch while a hand is still camera-tracked shows "touch to play" even though the camera's voice is still sounding** — the display contradicts the audio. Not a crash, not a lost note, just wrong.
-- **Fix:** Track presence per source rather than "last writer wins" — hide the hint if (camera hand present **OR** touch active), show it only when both are idle. Naturally bundles with 2.2 since both touch the same state.
-- **Effort:** ~30 lines
+### ~~2.1 Touch and camera fight over the on-screen display~~ ✅ Done
+Per-source presence tracking (`s_touch_active`, `s_hand0_active`, `s_hand1_active`) with a `hint_update()` helper. The hint only shows when all sources are idle.
 
-### 2.2 Second on-screen marker for hand 1
-- **Where:** `main/ui.c`, `main/ui.h`, `main/tracker.cpp` (the `slot == 0` guard in the detection loop)
-- **Problem:** Both tracked hands *sound*, but only hand 0 gets a marker and the note/freq/volume readouts. A deliberate scope cut to keep the duet change reviewable — now worth finishing.
-- **Fix:** A second marker object (different color — the Beach Boys palette's turquoise pairs with the existing coral), and a decision about the readout panel: either show two compact rows, or keep the big readout for hand 0 and give hand 1 just a marker. The second option is far less screen surgery.
-- **Effort:** ~50 lines, plus a layout judgment call
+### ~~2.2 Second on-screen marker for hand 1~~ ✅ Done
+Teal marker for hand 1, coral for hand 0. Both update position independently. Readout panel still tracks hand 0 only (simpler, and hand 0 is the "primary" hand).
 
 ### 2.3 `tracker_set_tuning()` is built but unreachable
 - **Where:** `main/tracker.h` / `main/tracker.cpp` (the API exists and works); nothing calls it
@@ -55,14 +56,14 @@ Track a hand, then touch-drag simultaneously → two independent notes. Release 
 
 ## Tier 3 — Polish
 
-### 3.1 README architecture diagram is out of date
-The ASCII diagram predates the buttons and settings tasks and doesn't show the duet driving two separate voices. Not wrong so much as incomplete. Cosmetic, but it's the first thing a reader looks at.
+### ~~3.1 README architecture diagram is out of date~~ ✅ Done
+Updated to show all tasks (camera, LVGL/touch/UI, buttons, settings), 3 voices, both markers, PolyBLEP, duet matching.
 
-### 3.2 PolyBLEP oscillators
-`saw()` and `tri()` in `main/synth.c` are naive and alias in the top octave. Harmless across the C2–C6 playing range and arguably on-brand for Bitcrush, but a PolyBLEP upgrade would clean up Clean Saw and Pad noticeably. See `docs/synth-engine.md` §13.
+### ~~3.2 PolyBLEP oscillators~~ ✅ Done
+`saw_blep()` and `tri_blep()` replace the naive versions. Applied to Clean Wave (saw), Warm Tone (tri), and Pad (tri). Bitcrush intentionally keeps the naive aliasing saw.
 
-### 3.3 Physical button long-press
-The touchscreen mode button long-presses to toggle Clean Wave's sine/saw. The physical buttons only do short-press cycling, so that toggle is touchscreen-only — `iot_button` supports long-press events, so this is a small addition to `main/buttons.c`.
+### ~~3.3 Physical button long-press~~ ✅ Done
+`BUTTON_LONG_PRESS_START` on `BSP_BUTTON_MODE` calls `ui_toggle_clean_wave()`.
 
 ---
 

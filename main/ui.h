@@ -16,9 +16,11 @@ extern "C" {
 esp_err_t ui_init(void);
 
 /* Show the camera-tracked hand on the play surface. Safe to call from any
- * task (takes the LVGL lock). x/y normalized [0,1] in surface space; freq is
- * the quantized frequency in Hz; vol_norm in [0,1]. present=false clears. */
-void ui_hand_update(bool present, float x_norm, float y_norm, float freq, float vol_norm);
+ * task (takes the LVGL lock). slot 0 = primary hand (coral marker + readout),
+ * slot 1 = secondary hand (teal marker, no readout change). x/y normalized
+ * [0,1] in surface space; freq is the quantized frequency in Hz; vol_norm
+ * in [0,1]. present=false clears. */
+void ui_hand_update(int slot, bool present, float x_norm, float y_norm, float freq, float vol_norm);
 
 /* Live view of the detector input (RGB888, w*h). Safe from any task. */
 void ui_preview_update(const uint8_t *rgb888, int w, int h);

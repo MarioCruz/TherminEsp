@@ -23,6 +23,13 @@ static void button_cb(void *btn, void *user_data)
     }
 }
 
+/* Long-press on MODE toggles sine/saw when on Clean Wave — mirrors the
+ * touchscreen mode button's long-press behavior. */
+static void mode_long_cb(void *btn, void *user_data)
+{
+    ui_toggle_clean_wave();
+}
+
 esp_err_t buttons_init(void)
 {
     button_handle_t btns[BSP_BUTTON_NUM];
@@ -34,6 +41,10 @@ esp_err_t buttons_init(void)
     }
     for (int i = 0; i < btn_cnt; i++) {
         iot_button_register_cb(btns[i], BUTTON_PRESS_DOWN, NULL, button_cb, (void *)(intptr_t)i);
+    }
+    /* long-press on MODE (index BSP_BUTTON_MODE) toggles Clean Wave's sine/saw */
+    if (btn_cnt > (int)BSP_BUTTON_MODE) {
+        iot_button_register_cb(btns[BSP_BUTTON_MODE], BUTTON_LONG_PRESS_START, NULL, mode_long_cb, NULL);
     }
     ESP_LOGI(TAG, "%d physical buttons registered", btn_cnt);
     return ESP_OK;

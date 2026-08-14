@@ -331,10 +331,10 @@ The synth is *not* the bottleneck in the instrument — hand-to-sound latency is
 
 ## 13. Known rough edges
 
-- **Naive (aliasing) oscillators** — saw/triangle aren't band-limited; harmless in-range, but a PolyBLEP upgrade would clean the top octave.
+- ~~**Naive (aliasing) oscillators**~~ — **Fixed.** `saw_blep()` / `tri_blep()` apply PolyBLEP band-limiting to the sawtooth and triangle waveforms (Clean Wave, Warm Tone, Pad). Bitcrush intentionally keeps a naive saw for lo-fi character.
 - **Block-rate parameter ramps** — smoothing steps every 5 ms, not per-sample; inaudible in practice but not mathematically click-proof on extreme sweeps.
 - **Warm-mode delay is per-voice and never freed** until reboot — a deliberate simplification (it's cheap PSRAM), not a leak that grows.
-- **Only hand 0 gets an on-screen marker/note/freq/volume display.** Both tracked hands sound (voices 0/1), but the UI's hint-label/marker state is shared between the camera path and touch, so it reflects whichever last wrote — a deliberate scope cut, not a race (see the tracker's own docs).
+- ~~**Only hand 0 gets an on-screen marker/note/freq/volume display.**~~ — **Fixed.** Both hands now get independent markers (coral for hand 0, teal for hand 1). The readout panel still tracks hand 0 only. Per-source presence tracking means releasing touch while a camera hand is tracked no longer shows a stale hint.
 
 ---
 

@@ -30,6 +30,7 @@ static lv_obj_t *s_preview;          /* live detector-input view (debug, hidden)
 static uint8_t *s_preview_buf;       /* RGB565 canvas buffer */
 static volatile bool s_preview_visible = false;
 static lv_obj_t *s_marker;
+static lv_obj_t *s_marker_hand1;      /* second marker for duet hand 1 */
 static lv_obj_t *s_note_label;
 static lv_obj_t *s_freq_label;
 static lv_obj_t *s_vol_label;
@@ -38,6 +39,11 @@ static lv_obj_t *s_mode_btn_label;
 static lv_obj_t *s_scale_btn_label;
 static lv_obj_t *s_root_btn_label;
 static lv_obj_t *s_glide_btn_label;
+
+/* per-source presence tracking: hint hides when ANY source is active */
+static bool s_touch_active;
+static bool s_hand0_active;
+static bool s_hand1_active;
 
 static const struct { const char *label; float seconds; } GLIDE_PRESETS[] = {
     { "Glide: Snap",  0.0f },
@@ -56,6 +62,17 @@ static void led_from_pitch(float x_norm)
     bsp_led_set_rgb(BSP_LED_STATUS, r, 20, b);
 }
 
+/* Show the hint only when no source is actively playing. Must be called
+ * under the display lock (or from LVGL context). */
+static void hint_update(void)
+{
+    if (s_touch_active || s_hand0_active || s_hand1_active) {
+        lv_obj_add_flag(s_hint_label, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_clear_flag(s_hint_label, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
 static void surface_event_cb(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
@@ -63,10 +80,13 @@ static void surface_event_cb(lv_event_t *e)
     if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
         synth_stop_voice(SYNTH_VOICE_TOUCH);
         lv_obj_add_flag(s_marker, LV_OBJ_FLAG_HIDDEN);
-        lv_label_set_text(s_note_label, "--");
-        lv_label_set_text(s_freq_label, "-- Hz");
-        lv_label_set_text(s_vol_label, "vol --");
-        lv_obj_clear_flag(s_hint_label, LV_OBJ_FLAG_HIDDEN);
+        if (!s_hand0_active) {
+            lv_label_set_text(s_note_label, "--");
+            lv_label_set_text(s_freq_label, "-- Hz");
+            lv_label_set_text(s_vol_label, "vol --");
+        }
+        s_touch_active = false;
+        hint_update();
         bsp_led_set_rgb(BSP_LED_STATUS, 0, 60, 0);
         return;
     }
@@ -102,7 +122,8 @@ static void surface_event_cb(lv_event_t *e)
     lv_label_set_text(s_note_label, note);
     lv_label_set_text_fmt(s_freq_label, "%d Hz", (int)freq);
     lv_label_set_text_fmt(s_vol_label, "vol %d%%", (int)(vol * 100));
-    lv_obj_add_flag(s_hint_label, LV_OBJ_FLAG_HIDDEN);
+    s_touch_active = true;
+    hint_update();
 
     lv_obj_clear_flag(s_marker, LV_OBJ_FLAG_HIDDEN);
     lv_obj_set_pos(s_marker, p.x - area.x1 - 12, p.y - area.y1 - 12);
@@ -293,29 +314,47 @@ void ui_preview_update(const uint8_t *rgb888, int w, int h)
     bsp_display_unlock();
 }
 
-void ui_hand_update(bool present, float x_norm, float y_norm, float freq, float vol_norm)
+void ui_hand_update(int slot, bool present, float x_norm, float y_norm, float freq, float vol_norm)
 {
+    if (slot < 0 || slot > 1) {
+        return;
+    }
     if (!bsp_display_lock(50)) {
         return;                      /* skip a frame rather than stall inference */
     }
+
+    lv_obj_t *marker = (slot == 0) ? s_marker : s_marker_hand1;
+
     if (!present) {
-        lv_obj_add_flag(s_marker, LV_OBJ_FLAG_HIDDEN);
-        lv_label_set_text(s_note_label, "--");
-        lv_label_set_text(s_freq_label, "-- Hz");
-        lv_label_set_text(s_vol_label, "vol --");
-        lv_obj_clear_flag(s_hint_label, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(marker, LV_OBJ_FLAG_HIDDEN);
+        if (slot == 0) {
+            s_hand0_active = false;
+            if (!s_touch_active) {
+                lv_label_set_text(s_note_label, "--");
+                lv_label_set_text(s_freq_label, "-- Hz");
+                lv_label_set_text(s_vol_label, "vol --");
+            }
+        } else {
+            s_hand1_active = false;
+        }
+        hint_update();
     } else {
-        char note[8];
-        synth_note_name(freq, note);
-        lv_label_set_text(s_note_label, note);
-        lv_label_set_text_fmt(s_freq_label, "%d Hz", (int)freq);
-        lv_label_set_text_fmt(s_vol_label, "vol %d%%", (int)(vol_norm * 100));
-        lv_obj_add_flag(s_hint_label, LV_OBJ_FLAG_HIDDEN);
+        if (slot == 0) {
+            s_hand0_active = true;
+            char note[8];
+            synth_note_name(freq, note);
+            lv_label_set_text(s_note_label, note);
+            lv_label_set_text_fmt(s_freq_label, "%d Hz", (int)freq);
+            lv_label_set_text_fmt(s_vol_label, "vol %d%%", (int)(vol_norm * 100));
+        } else {
+            s_hand1_active = true;
+        }
+        hint_update();
 
         int32_t w = lv_obj_get_width(s_surface);
         int32_t h = lv_obj_get_height(s_surface);
-        lv_obj_clear_flag(s_marker, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_set_pos(s_marker, (int32_t)(x_norm * w) - 12, (int32_t)(y_norm * h) - 12);
+        lv_obj_clear_flag(marker, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_pos(marker, (int32_t)(x_norm * w) - 12, (int32_t)(y_norm * h) - 12);
     }
     bsp_display_unlock();
 }
@@ -383,6 +422,14 @@ esp_err_t ui_init(void)
     lv_obj_set_style_border_width(s_marker, 0, 0);
     lv_obj_add_flag(s_marker, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_marker, LV_OBJ_FLAG_CLICKABLE);
+
+    s_marker_hand1 = lv_obj_create(s_surface);
+    lv_obj_set_size(s_marker_hand1, 24, 24);
+    lv_obj_set_style_radius(s_marker_hand1, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(s_marker_hand1, lv_color_hex(COLOR_TEAL), 0);
+    lv_obj_set_style_border_width(s_marker_hand1, 0, 0);
+    lv_obj_add_flag(s_marker_hand1, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(s_marker_hand1, LV_OBJ_FLAG_CLICKABLE);
 
     /* metrics panel: right side */
     lv_obj_t *panel = lv_obj_create(scr);

@@ -89,32 +89,39 @@ Runs on the **ESP32-S31-Korvo-1** dev board — everything needed is on it:
 | Two hands | **Duet** | Each hand gets its own independent voice, matched frame-to-frame so identity mostly survives hands crossing |
 | **Touchscreen** | Same pitch/volume | X = pitch, Y = volume — its own voice, so it plays alongside a tracked hand rather than fighting it. Works even with the camera covered |
 
-On-screen: live note name, frequency, volume, and a marker that follows your (primary) hand, plus buttons to cycle through **7 synth modes** (long-press while on Clean Wave to swap sine/sawtooth), **10 musical scales**, **12 root notes**, and **4 glide presets**. The board's 4 physical buttons mirror those same four controls if you'd rather not touch the screen. The status LED shifts from coral to sky-blue as pitch rises (Beach Boys palette, carried over from Wavr). Every setting survives a reboot.
+On-screen: live note name, frequency, volume, and a marker that follows your (primary) hand, plus buttons to cycle through **7 synth modes** (long-press while on Clean Wave to swap sine/sawtooth), **10 musical scales**, **12 root notes**, and **4 glide presets**. The board's 4 physical buttons mirror those same four controls if you'd rather not touch the screen (long-press MODE toggles sine/sawtooth too). In duet mode, a second teal marker tracks hand 1 alongside the primary coral marker. The status LED shifts from coral to sky-blue as pitch rises (Beach Boys palette, carried over from Wavr). Every setting survives a reboot.
 
 ## Architecture
 
 ```
-            ┌───────────────────────── ESP32-S31 ─────────────────────────┐
- OV3660     │                                                             │
- camera ──▶ │  Core 0                          Core 1                     │
- (720p      │  ├─ camera task (V4L2 dequeue)   ├─ synth task (prio MAX-3) │
-  JPEG,     │  ├─ LVGL / touch / UI            │    7 modes · 10 scales   │
-  17 fps)   │  └─ latest-frame mailbox ──────▶ │    biquad filter · glide │
-            │                                  │    48 kHz blocks ──▶ I2S │──▶ ES8389 ──▶ 🔊
-            │       tracker task (prio 5, core 1)                         │
-            │       HW JPEG decode → RGB888 → 224×224 downscale           │
-            │       → espdet-pico inference (~95 ms)                      │
-            │       → EMA smoothing + hysteresis                          │
-            │       → pitch / volume / filter → synth voice               │
-            └─────────────────────────────────────────────────────────────┘
+            ┌────────────────────────── ESP32-S31 ──────────────────────────┐
+ OV3660     │                                                               │
+ camera ──▶ │  Core 0                            Core 1                     │
+ (720p      │  ├─ camera task (V4L2 dequeue)     ├─ synth task (prio MAX-3) │
+  JPEG,     │  ├─ LVGL / touch / UI              │    3 voices (2 hands     │
+  17 fps)   │  │    surface_event_cb ─────────▶  │    + 1 touch)            │
+            │  │    ├─ 4 touchscreen buttons     │    7 modes · 10 scales   │
+            │  │    └─ coral + teal markers      │    PolyBLEP oscillators  │
+            │  ├─ buttons task (iot_button)       │    biquad filter · glide │
+            │  │    └─ 4 ADC buttons ─────────▶  │    48 kHz blocks ──▶ I2S │──▶ ES8389 ──▶ 🔊
+            │  ├─ settings task (NVS debounce)   │                          │
+            │  └─ latest-frame mailbox ────────▶ tracker task (prio 5)      │
+            │                                    HW JPEG → RGB888 → 224×224 │
+            │                                    → espdet-pico (~95 ms)     │
+            │                                    → up to 2 hands matched    │
+            │                                      frame-to-frame (duet)    │
+            │                                    → EMA smoothing            │
+            │                                    → pitch / vol / filter     │
+            │                                      → synth voices 0 & 1    │
+            └───────────────────────────────────────────────────────────────┘
 ```
 
 ### The synth engine (`main/synth.c`)
 
-A sample-accurate C port of Wavr's Web Audio graph. Phase-accumulator oscillators render 5 ms blocks at 48 kHz; a blocking codec write paces the loop off the I2S DMA clock.
+A sample-accurate C port of Wavr's Web Audio graph. Phase-accumulator oscillators render 5 ms blocks at 48 kHz; a blocking codec write paces the loop off the I2S DMA clock. Sawtooth and triangle waveforms use **PolyBLEP** band-limiting for clean output even in the top octave.
 
 - **FM Synth** — sine carrier, 2× modulator, index tracks pitch (the classic electro-theremin)
-- **Clean Wave** — pure sine
+- **Clean Wave** — pure sine (long-press toggles to PolyBLEP sawtooth)
 - **Warm Tone** — triangle + 150 ms feedback delay with soft-clip (stands in for Web Audio's compressor)
 - **Pad** — three detuned oscillators (±0.5%)
 - **Theremin** — sine with 5.5 Hz vibrato scaled to pitch
@@ -188,15 +195,17 @@ Things this board taught me the hard way — each one cost a debug cycle:
 ## Status
 
 - ✅ Synth engine — all 7 modes verified on hardware, every boot; root note, glide (4 presets), and Clean Wave's sine/sawtooth are all playable now, not just wired into the engine
+- ✅ **PolyBLEP oscillators** — sawtooth and triangle waveforms are band-limited for clean output in the top octave (Clean Wave, Warm Tone, Pad); Bitcrush intentionally keeps the naive aliasing saw
 - ✅ Touch play — the screen is a playable instrument, on its own dedicated voice so it never fights a tracked hand for the same note
 - ✅ Live hand detection — working end to end (camera aim + lighting were the last blocker; solved by propping the board so the camera faces the player, not the ceiling)
-- ✅ **Multi-hand duet** — up to two tracked hands drive two independent voices, matched frame-to-frame by nearest previous position so identity mostly survives hands crossing
-- ✅ Physical controls — the board's 4-button ADC ladder cycles mode/scale/root/glide, same as the touchscreen buttons
+- ✅ **Multi-hand duet** — up to two tracked hands drive two independent voices, matched frame-to-frame by nearest previous position so identity mostly survives hands crossing; each hand gets its own on-screen marker (coral for hand 0, teal for hand 1)
+- ✅ Physical controls — the board's 4-button ADC ladder cycles mode/scale/root/glide, same as the touchscreen buttons; **long-press MODE** toggles Clean Wave's sine/sawtooth
 - ✅ Settings persistence — mode/scale/root/glide/waveform survive a reboot (NVS, debounced writes)
 - ✅ Tracker thresholds are runtime-tunable (`tracker_set_tuning()`) instead of reflash-to-adjust — nothing calls it yet (console commands or a debug screen are the natural next step)
 - ✅ CI — GitHub Actions builds the firmware on every push ([workflow](.github/workflows/build.yml))
-- ✅ The 2026-08-10 batch above is flashed and boot-verified on hardware — clean boot log, self-test + model self-test pass, physical buttons register correctly
-- 🔜 No known bugs remain. What's left — hands-on play testing, a known touch/camera display conflict, and the next round of features — is in **[TODO.md](TODO.md)**
+- ✅ Touch/camera display no longer fight — per-source presence tracking means the hint only shows when no source is active, and releasing touch while a camera hand is tracked doesn't clear the readout
+- ✅ The 2026-08-14 batch above is flashed and boot-verified on hardware — clean boot log, self-test + model self-test pass, physical buttons register correctly
+- 🔜 What's left — hands-on play testing and the next round of features — is in **[TODO.md](TODO.md)**
 
 ## License
 

@@ -364,11 +364,8 @@ static void tracker_task(void *arg)
             float freq_norm = remap_active(1.0f - h.ema_x, tune.active_margin);
             float vol = remap_active(1.0f - h.ema_y, tune.active_margin);
             float freq = synth_update_voice(slot, freq_norm, vol, h.ema_open);
+            ui_hand_update(slot, true, freq_norm, 1.0f - vol, freq, vol);
             if (slot == 0) {
-                /* on-screen note/freq/vol/marker track hand 0 only; hand 1
-                 * still sounds (voice 1), just without its own display —
-                 * a two-marker UI is a natural follow-up, not done here */
-                ui_hand_update(true, freq_norm, 1.0f - vol, freq, vol);
                 bsp_led_set_rgb(BSP_LED_STATUS,
                                 (uint8_t)(60 * (1.0f - freq_norm)), 20,
                                 (uint8_t)(60 * freq_norm));
@@ -382,8 +379,8 @@ static void tracker_task(void *arg)
             if (++hands[slot].misses >= tune.miss_limit) {
                 hands[slot].present = false;
                 synth_stop_voice(slot);
+                ui_hand_update(slot, false, 0, 0, 0, 0);
                 if (slot == 0) {
-                    ui_hand_update(false, 0, 0, 0, 0);
                     bsp_led_set_rgb(BSP_LED_STATUS, 0, 60, 0);
                 }
             }

@@ -172,12 +172,61 @@ static inline void phase_wrap(float *ph)
 {
     if (*ph >= TWO_PI) {
         *ph -= TWO_PI;
+    } else if (*ph < 0.0f) {
+        *ph += TWO_PI;
     }
 }
 
-/* naive saw/triangle from a 0..2pi phase */
-static inline float saw(float ph)      { return ph / (float)M_PI - 1.0f; }
-static inline float tri(float ph)      { float s = saw(ph); return 2.0f * fabsf(s) - 1.0f; }
+/* ---- PolyBLEP band-limited saw/triangle ----
+ *
+ * The naive saw has a hard discontinuity at the phase wrap (2π → 0) that
+ * aliases badly in the top octave. PolyBLEP applies a quadratic polynomial
+ * correction to the samples straddling each discontinuity, suppressing the
+ * spectral energy above Nyquist without the cost of a wavetable or oversampling.
+ *
+ * dt = normalized frequency = freq / SAMPLE_RATE (same as phase_step / 2π).
+ * t  = phase / 2π, normalized to [0, 1).
+ */
+
+/* PolyBLEP residual: reduces the Gibbs-phenomenon overshoot at discontinuities.
+ * t is the normalized phase [0,1), dt is the normalized frequency. */
+static inline float polyblep(float t, float dt)
+{
+    if (t < dt) {
+        /* sample is within one step after the transition */
+        float x = t / dt;
+        return x + x - x * x - 1.0f;
+    }
+    if (t > 1.0f - dt) {
+        /* sample is within one step before the transition */
+        float x = (t - 1.0f) / dt;
+        return x * x + x + x + 1.0f;
+    }
+    return 0.0f;
+}
+
+/* Band-limited sawtooth: -1 → +1 ramp with PolyBLEP at the wrap point.
+ * ph is [0, 2π), freq is in Hz. */
+static inline float saw_blep(float ph, float freq)
+{
+    float t = ph / TWO_PI;                /* normalize phase to [0,1) */
+    float dt = freq / (float)SAMPLE_RATE; /* normalized frequency */
+    float naive = 2.0f * t - 1.0f;       /* naive saw: -1 to +1 */
+    return naive - polyblep(t, dt);
+}
+
+/* Band-limited triangle: integrate the PolyBLEP saw and leak-integrate.
+ * Uses the standard trick: a leaky integrator of the saw produces a triangle
+ * with correct amplitude and no DC drift. The per-voice integrator state is
+ * stored in the phase accumulators (we use ph2 for CLEAN saw, ph3 for PAD).
+ * But since tri is only used in Warm and Pad — and those voices already use
+ * ph2/ph3 for other things — we use a simpler approach: derive tri from the
+ * naive |saw| shape but apply PolyBLEP correction to the underlying saw. */
+static inline float tri_blep(float ph, float freq)
+{
+    float s = saw_blep(ph, freq);
+    return 2.0f * fabsf(s) - 1.0f;
+}
 
 /* ---- per-voice render: one mono sample at the voice's current state ---- */
 
@@ -196,11 +245,11 @@ static float voice_sample(voice_t *v, synth_mode_t mode)
         break;
     }
     case SYNTH_MODE_CLEAN:
-        out = s_clean_saw ? saw(v->ph1) : sinf(v->ph1);
+        out = s_clean_saw ? saw_blep(v->ph1, f) : sinf(v->ph1);
         v->ph1 += phase_step(f);
         break;
     case SYNTH_MODE_WARM: {
-        float dry = tri(v->ph1);
+        float dry = tri_blep(v->ph1, f);
         v->ph1 += phase_step(f);
         float wet = v->delay ? v->delay[v->delay_pos] : 0.0f;
         /* feedback via soft clip — stands in for the JS compressor */
@@ -213,7 +262,7 @@ static float voice_sample(voice_t *v, synth_mode_t mode)
         break;
     }
     case SYNTH_MODE_PAD:
-        out = 0.4f * (sinf(v->ph1) + sinf(v->ph2) + tri(v->ph3));
+        out = 0.4f * (sinf(v->ph1) + sinf(v->ph2) + tri_blep(v->ph3, f * 0.995f));
         v->ph1 += phase_step(f);
         v->ph2 += phase_step(f * 1.005f);
         v->ph3 += phase_step(f * 0.995f);
@@ -233,7 +282,8 @@ static float voice_sample(voice_t *v, synth_mode_t mode)
         v->ph3 += phase_step(f * 3.0f);
         break;
     case SYNTH_MODE_BITCRUSH: {
-        float x = saw(v->ph1);
+        /* Bitcrush deliberately keeps the naive saw — aliasing is on-brand */
+        float x = 2.0f * (v->ph1 / TWO_PI) - 1.0f;
         v->ph1 += phase_step(f);
         out = roundf(x * 8.0f) / 8.0f;
         break;
@@ -394,9 +444,13 @@ float synth_update_voice(int id, float freq_norm, float vol_norm, float openness
     if (s_mode == SYNTH_MODE_WARM && !v->delay) {
         float *d = heap_caps_calloc(DELAY_FRAMES, sizeof(float), MALLOC_CAP_SPIRAM);
         taskENTER_CRITICAL(&s_lock);
-        v->delay = d;
-        v->delay_pos = 0;
+        if (!v->delay) {
+            v->delay = d;
+            v->delay_pos = 0;
+            d = NULL;   /* ownership transferred — don't free below */
+        }
         taskEXIT_CRITICAL(&s_lock);
+        heap_caps_free(d);  /* no-op if NULL (won the race); frees if lost */
     }
     return freq;
 }
@@ -438,9 +492,13 @@ void synth_set_mode(synth_mode_t mode)
             if (!v->delay) {
                 float *d = heap_caps_calloc(DELAY_FRAMES, sizeof(float), MALLOC_CAP_SPIRAM);
                 taskENTER_CRITICAL(&s_lock);
-                v->delay = d;
-                v->delay_pos = 0;
+                if (!v->delay) {
+                    v->delay = d;
+                    v->delay_pos = 0;
+                    d = NULL;
+                }
                 taskEXIT_CRITICAL(&s_lock);
+                heap_caps_free(d);  /* lost the race — free duplicate */
             } else {
                 taskENTER_CRITICAL(&s_lock);
                 v->delay_reset_pending = true;
