@@ -91,6 +91,10 @@ Runs on the **ESP32-S31-Korvo-1** dev board — everything needed is on it:
 
 On-screen: live note name, frequency, volume, and a marker that follows your (primary) hand, plus buttons to cycle through **8 synth modes** (long-press while on Clean Wave to swap sine/sawtooth), **10 musical scales**, **12 root notes**, and **4 glide presets**. The board's 4 physical buttons mirror those same four controls if you'd rather not touch the screen (long-press MODE toggles sine/sawtooth too). In duet mode, a second teal marker tracks hand 1 alongside the primary coral marker. The status LED shifts from coral to sky-blue as pitch rises (Beach Boys palette, carried over from Wavr). Every setting survives a reboot.
 
+**Long-press SET** switches between Theremin mode (hand-wave surface) and a **Piano Keyboard** mode — 2 octaves of on-screen keys (white + black) that play using whichever synth mode is selected. Keys follow the current scale and root; in non-chromatic scales every key is a scale degree so you can't hit a wrong note.
+
+**Long-press VOLUP** starts/stops **recording** to the microSD card — 48 kHz stereo WAV files, auto-numbered (`rec_001.wav`, `rec_002.wav`, …). LED turns red while recording.
+
 ## Architecture
 
 ```
@@ -171,9 +175,10 @@ main/
 ├── synth.c/.h        the 8-mode DSP engine (port of Wavr's audio-engine.js)
 ├── tracker.cpp/.h    JPEG decode → espdet-pico → multi-hand gesture mapping
 ├── camera.c/.h       V4L2 capture task (720p JPEG)
-├── ui.c/.h           LVGL touchscreen UI + hidden camera debug view
+├── ui.c/.h           LVGL touchscreen UI + piano keyboard + hidden camera debug view
 ├── buttons.c/.h      the board's 4 physical buttons, same controls as the UI
 ├── settings.c/.h     NVS persistence (mode/scale/root/glide/waveform)
+├── recorder.c/.h     SD card WAV recorder (48 kHz stereo, long-press VOLUP)
 └── testhand_224.rgb  embedded model self-test image
 ```
 
@@ -205,6 +210,8 @@ Things this board taught me the hard way — each one cost a debug cycle:
 - ✅ Tracker thresholds are runtime-tunable (`tracker_set_tuning()`) instead of reflash-to-adjust — nothing calls it yet (console commands or a debug screen are the natural next step)
 - ✅ CI — GitHub Actions builds the firmware on every push ([workflow](.github/workflows/build.yml))
 - ✅ Touch/camera display no longer fight — per-source presence tracking means the hint only shows when no source is active, and releasing touch while a camera hand is tracked doesn't clear the readout
+- ✅ **Piano Keyboard mode** — long-press SET toggles a 2-octave on-screen piano (white + black keys) that plays through whichever synth mode is active; keys update when scale/root change
+- ✅ **SD card WAV recorder** — long-press VOLUP starts/stops recording 48 kHz stereo WAV to microSD; LED turns red while recording; auto-numbered files
 - ✅ The 2026-08-14 batch above is flashed and boot-verified on hardware — clean boot log, self-test + model self-test pass, physical buttons register correctly
 - 🔜 What's left — hands-on play testing and the next round of features — is in **[TODO.md](TODO.md)**
 
